@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Bonsai の ternary GGUF に必要な Prism ML fork と CUDA 12.8 ランタイム。
+set -euo pipefail
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bin"
+CUDA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../llama.cpp/bin" && pwd)"
+export LD_LIBRARY_PATH="${BIN_DIR}:${CUDA_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+exec "${BIN_DIR}/llama-server" "$@"

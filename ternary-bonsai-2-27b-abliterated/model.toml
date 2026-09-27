@@ -1,0 +1,6 @@
+# 統合チャット (../llm-chat) が読み込むメタデータ
+id = "ternary-bonsai-2-27b-abliterated"
+name = "Ternary Bonsai 2 27B Abliterated"
+description = "Hikari07jp v0.1・PQ2_0・Prism ML 版 llama.cpp・全層 GPU を優先"
+order = 5
+thinking_mode = "reasoning_effort"

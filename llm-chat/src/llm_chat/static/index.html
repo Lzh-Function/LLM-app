@@ -1,0 +1,717 @@
+<!doctype html>
+<!-- このファイルだけでチャット画面を構成する。HTML が部品、CSS が見た目、JavaScript が動作を担当する。 -->
+<!-- lang="ja" はページの主な言語をブラウザーや読み上げソフトに伝える。 -->
+<html lang="ja">
+<head>
+<!-- head は画面に直接表示しない設定や、読み込む外部ファイルを書く場所。 -->
+<!-- UTF-8 を指定すると、日本語などの文字を正しく表示できる。 -->
+<meta charset="utf-8">
+<!-- スマートフォンでも画面幅に合わせて表示するための設定。 -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- ブラウザーのタブに表示するタイトル。 -->
+<title>LLM Chat</title>
+<!-- marked は Markdown を HTML に変換する外部ライブラリ。モデルの回答表示に使う。 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<!-- DOMPurify は変換された HTML から危険な要素を除く外部ライブラリ。 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<!-- style 内には、このページ専用の CSS（色・余白・配置など）を書く。 -->
+<style>
+  /* :root はページ全体を表す。--bg などは var(--bg) で再利用できる CSS 変数。 */
+  :root {
+    /* 背景、カード、文字、補助文字、境界線、強調色、ユーザー発言、コード、エラーの色。 */
+    --bg: #f7f7f5; --panel: #ffffff; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc;
+    --accent: #2f6f5e; --user: #e8f0ec; --code: #f0efea; --err: #b3261e;
+    /* ブラウザー標準のフォーム部品なども明るい配色に合わせる。 */
+    color-scheme: light;
+  }
+  /* OS がダークモードなら、同じ CSS 変数を暗い色で上書きする。 */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --fg: #e8e7e2; --muted: #9a9993; --line: #34332f;
+      --accent: #6fbfa6; --user: #23302b; --code: #2a2a27; --err: #f2867d;
+      color-scheme: dark;
+    }
+  }
+  /* * は全要素を選ぶ。padding や border を幅の計算に含め、レイアウトを扱いやすくする。 */
+  * { box-sizing: border-box; }
+  /* body はページ全体。縦方向の flex 配置で header・main・footer を積む。 */
+  /* 100vh は画面の高さ、flex: 1 を持つ main が余った高さを使う。 */
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+         height: 100vh; display: flex; flex-direction: column; }
+  /* ヘッダーの中身を横に並べ、幅が足りなければ折り返す。 */
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+           padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  /* 見出しをヘッダーに収まるサイズにする。 */
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  /* 入力部品は本文と同じフォント・文字色を使う。 */
+  select, button, input, textarea { font: inherit; color: inherit; }
+  /* モデル選択と数値入力の背景、枠線、角丸、内側余白。 */
+  select, input[type=number] { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+  /* 通常ボタン、主要ボタン、押せないボタンの見た目。 */
+  button { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  /* 状態バッジの共通スタイル。ready/loading/error のクラスを JS で付け替えて色を変える。 */
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.ready { color: var(--accent); border-color: var(--accent); }
+  .badge.loading { color: #b7791f; border-color: #b7791f; }
+  .badge.error { color: var(--err); border-color: var(--err); }
+  /* flex: 1 で残りの横幅を埋め、ヘッダー右側の操作を端へ寄せる。 */
+  .spacer { flex: 1; }
+  /* チェックボックスとその説明文を横にそろえる。 */
+  label.opt { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+  /* 選択中モデルの説明文。 */
+  #desc { font-size: 12px; color: var(--muted); }
+  /* 会話欄だけ縦スクロールさせる。overflow-y: auto は必要なときだけスクロールバーを出す。 */
+  main { flex: 1; overflow-y: auto; padding: 16px; }
+  /* 会話と入力欄の横幅を 860px までに抑え、左右中央に置く。 */
+  .wrap { max-width: 860px; margin: 0 auto; }
+  /* 1 件の発言をカードとして表示する。長い文字列も折り返す。 */
+  .msg { margin: 0 0 16px; padding: 10px 14px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); overflow-wrap: anywhere; }
+  /* ユーザー発言は色を変え、入力した改行を保つ。 */
+  .msg.user { background: var(--user); white-space: pre-wrap; }
+  /* 発言の上部に置くモデル名・所要時間などの補足表示。 */
+  .msg .meta { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  /* エラー表示は赤色と等幅フォントで区別する。 */
+  .msg.error { color: var(--err); white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; }
+  /* Markdown のコードブロック。長いコードは横方向にスクロールできる。 */
+  .msg pre { background: var(--code); padding: 10px; border-radius: 6px; overflow-x: auto; }
+  /* 行内コードとコードブロックの文字に等幅フォントを使う。 */
+  .msg code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 13px; }
+  /* 回答の最初と最後の段落に余分な上下余白を付けない。 */
+  .msg p:first-child { margin-top: 0; } .msg p:last-child { margin-bottom: 0; }
+  /* reasoning_content が届いたときだけ表示する折りたたみ欄。 */
+  details.think { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+  details.think summary { cursor: pointer; }
+  details.think div { white-space: pre-wrap; border-left: 3px solid var(--line); padding-left: 10px; margin-top: 4px; }
+  /* ウェブ検索・ページ閲覧など、ツール実行の途中経過を短く表示する。 */
+  .tools { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .tools div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tools .error { color: var(--err); }
+  /* 回答の下に、参照した検索結果のリンクを表示する。 */
+  .sources { font-size: 13px; margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 6px; }
+  .sources ol { margin: 4px 0 0; padding-left: 0; list-style: none; }
+  .sources li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sources a { color: var(--accent); }
+  /* 入力欄があるフッター。 */
+  footer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px; }
+  /* システムプロンプト入力は横幅いっぱいに広げる。 */
+  #sys { width: 100%; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: var(--bg); font-size: 13px; }
+  /* メッセージ入力欄と送信・中止ボタンを横並びにする。 */
+  .row { display: flex; gap: 8px; align-items: flex-end; }
+  /* flex: 1 で入力欄を広げる。高さは JS の autosize() でも更新する。 */
+  #input { flex: 1; resize: none; min-height: 44px; max-height: 40vh; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg); }
+  #voiceStatus { color: var(--muted); font-size: 12px; min-height: 18px; }
+  /* 会話がまだないときの案内文。 */
+  #empty { color: var(--muted); text-align: center; margin-top: 20vh; }
+</style>
+</head>
+<body>
+<!-- header は上部の操作エリア。id は JavaScript から要素を見つけるための名前。 -->
+<header>
+  <!-- ページ名。 -->
+  <h1>LLM Chat</h1>
+  <!-- モデルの候補は起動時に /api/status から取得し、JS で option を追加する。 -->
+  <select id="model"></select>
+  <!-- 選んだモデルをバックエンドで起動する。class="primary" は強調表示用。 -->
+  <button id="loadBtn" class="primary">切り替え</button>
+  <!-- stopped / loading / ready / error を表示する。 -->
+  <span id="badge" class="badge">stopped</span>
+  <!-- 選択中モデルの短い説明。 -->
+  <span id="desc"></span>
+  <!-- ヘッダー左側と右側の操作の間に空白を作る。 -->
+  <span class="spacer"></span>
+  <!-- checked は JS から読み取る。title はマウスを乗せたときの補足説明。 -->
+  <label class="opt" title="LLM/llm-chat/history/ に JSON と Markdown で保存"><input type="checkbox" id="save"> 履歴を保存</label>
+  <!-- 過去に保存した会話を選択する。option は JS が追加する。 -->
+  <select id="hist"><option value="">過去の会話…</option></select>
+  <!-- 検索機能を使うかどうか。検索語や閲覧 URL が外部へ送られる点も表示する。 -->
+  <label class="opt" title="DuckDuckGo で検索 (検索語と閲覧 URL は外部に送信されます)"><input type="checkbox" id="web"> 🌐 ウェブ検索</label>
+  <!-- 対応モデルへ enable_thinking を渡す共通スイッチ。非対応モデルでは思考欄は出ない。 -->
+  <label class="opt"><input type="checkbox" id="think" checked> 思考モード</label>
+  <label class="opt"><input type="checkbox" id="speak"> 🔊 読み上げ</label>
+  <select id="voiceSpeaker" aria-label="読み上げ話者" disabled><option>音声を確認中…</option></select>
+  <label class="opt" title="話者は選択欄で指定し、その話者の声色を回答ごとに LLM が選びます"><input type="checkbox" id="autoStyle" checked> 声色を自動選択</label>
+  <select id="voiceStyle" aria-label="手動の声色" disabled hidden></select>
+  <button id="stopAudioBtn" type="button">音声停止</button>
+  <button id="readAgainBtn" type="button">再読上げ</button>
+  <!-- 回答のランダムさを調整する温度。空欄ならモデル側の既定値を使う。 -->
+  <label class="opt">温度 <input type="number" id="temp" step="0.1" min="0" max="2" placeholder="既定" style="width:70px"></label>
+  <!-- ログの表示、モデルの停止、会話の作り直し。 -->
+  <button id="logBtn">ログ</button>
+  <button id="unloadBtn">停止</button>
+  <button id="newBtn">新しい会話</button>
+</header>
+<!-- main が会話の表示領域。scroll がスクロール対象、log に発言カードを追加する。 -->
+<!-- 初期表示の案内は、最初の発言が追加されると JS が削除する。 -->
+<main id="scroll">
+  <div class="wrap" id="log">
+    <div id="empty">モデルを選んで「切り替え」を押してください。会話の途中でもモデルを変更できます。</div>
+  </div>
+</main>
+<!-- footer はメッセージを入力する領域。 -->
+<footer>
+  <div class="wrap">
+    <!-- system ロールの指示として、各リクエストの先頭に送る任意の入力。 -->
+    <input id="sys" placeholder="システムプロンプト (任意)">
+    <div class="row">
+      <!-- rows="1" で開始し、入力に応じて JS が高さを増やす。 -->
+      <textarea id="input" rows="1" placeholder="メッセージを入力 (Enter で送信 / Shift+Enter で改行)"></textarea>
+      <button id="micBtn" type="button" title="録音を開始・終了">🎙 録音</button>
+      <!-- 送信中は送信ボタンを無効にし、hidden の中止ボタンを表示する。 -->
+      <button id="sendBtn" class="primary">送信</button>
+      <button id="stopBtn" hidden>中止</button>
+    </div>
+    <div id="voiceStatus" role="status" aria-live="polite"></div>
+  </div>
+</footer>
+
+<!-- script 内は画面を動かす JavaScript。末尾に置くので、上の HTML 要素を取得できる。 -->
+<script>
+// $ は id から HTML 要素を取得する短い関数。例: $("input") は入力欄を返す。
+const $ = (id) => document.getElementById(id);
+// state は画面全体で共有する現在の状態。status はサーバー状態、messages は会話本文、
+// controller は進行中の通信を中止するためのオブジェクト、conv は現在の会話 ID など。
+const state = { status: null, messages: [], controller: null, conv: null, recorder: null, speech: null, voices: [], lastReply: "", lastReplyStyle: null, lastReplyEngine: null };
+// HTML に文字列を埋め込む前に、< や & などを無害な表記に変換する。
+// 例えば <script> をそのまま HTML として実行させないための処理。
+const esc = (s) => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// ---- 会話履歴 -------------------------------------------------------------
+// 新しい会話の ID と作成日時を用意し、画面上の会話データを空にする。
+function newConv() {
+  state.lastReply = "";
+  state.lastReplyStyle = null;
+  state.lastReplyEngine = null;
+  // 日時の各数字を 2 桁にそろえる。例: 9 → "09"。
+  const now = new Date(), p = (n) => String(n).padStart(2, "0");
+  // YYYYMMDD-HHMMSS 形式の文字列を作る。getMonth() は 0 始まりなので 1 を足す。
+  const stamp = `${now.getFullYear()}${p(now.getMonth()+1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+  // 時刻に短い乱数を加えて ID の衝突を減らす。toISOString() は標準的な日時表現。
+  state.conv = { id: `${stamp}-${Math.random().toString(36).slice(2, 6)}`, created: now.toISOString() };
+  state.messages = [];
+}
+// 保存が有効なら、現在の会話をサーバーの履歴 API に送る。
+async function saveConv() {
+  // return は関数をここで終了する。保存オフ、または発言がない場合は何もしない。
+  if (!$("save").checked || !state.messages.length) return;
+  // 最初のユーザー発言から、履歴一覧用の短い題名を作る。
+  // ?. は対象がない場合に処理を止め、?? "" はそのとき空文字を使う書き方。
+  const c = state.conv, first = state.messages.find(m => m.role === "user")?.content ?? "";
+  // サーバーに渡す JSON の元データ。改行や連続空白を 1 個の空白にして題名を 40 文字に切る。
+  const body = { id: c.id, created: c.created, updated: new Date().toISOString(),
+                 title: first.replace(/\s+/g, " ").slice(0, 40), system: $("sys").value.trim(),
+                 messages: state.messages };
+  try {
+    // fetch は HTTP 通信。PUT /api/history/{id} で同じ ID の履歴を作成または更新する。
+    // await は通信が終わるまでこの関数内の次の処理を待つ。
+    const r = await fetch(`/api/history/${c.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    // HTTP エラーなら catch へ進める。成功したら履歴の選択肢を読み直す。
+    if (!r.ok) throw new Error(await r.text());
+    refreshHistory();
+  // 通信エラーを画面に表示する。?? は message がない場合に e 自体を使う。
+  } catch (e) { addEl("error", "履歴の保存に失敗: " + esc(String(e.message ?? e))); }
+}
+// 保存済み会話の一覧を取得し、<select id="hist"> の選択肢を作り直す。
+async function refreshHistory() {
+  // 内側の await で通信結果を受け、外側の await で JSON を読み取る。
+  const items = await (await fetch("/api/history")).json();
+  // map は各履歴を option タグへ変換し、join("") は 1 つの HTML 文字列にまとめる。
+  // 題名などの表示文字列には esc() を使い、HTML として解釈されないようにする。
+  $("hist").innerHTML = '<option value="">過去の会話…</option>' + items.map(h =>
+    `<option value="${h.id}">${esc(h.updated.slice(0, 16).replace("T", " "))} ${esc(h.title || h.id)} (${h.n})</option>`).join("");
+}
+// 履歴一覧で選んだ会話をサーバーから読み、画面に再表示する。
+async function openConv(id) {
+  stopSpeech();
+  const c = await (await fetch(`/api/history/${id}`)).json();
+  // 保存されていた会話 ID・発言・システムプロンプトを現在の状態へ戻す。
+  state.conv = { id: c.id, created: c.created };
+  state.messages = c.messages;
+  const lastAssistant = [...c.messages].reverse().find(m => m.role === "assistant");
+  state.lastReply = lastAssistant?.content ?? "";
+  state.lastReplyStyle = lastAssistant?.voice_style_id ?? null;
+  state.lastReplyEngine = lastAssistant?.voice_engine ?? "aivis";
+  $("sys").value = c.system ?? "";
+  // 開いた履歴への続きの発言も保存できるようにする。
+  $("save").checked = true; storeSavePref();
+  // 画面の古い発言を消し、保存された発言を順番に表示する。
+  $("log").innerHTML = "";
+  for (const m of c.messages) {
+    if (m.role === "user") addEl("user", "").textContent = m.content;
+    else renderAssistant(m);
+  }
+}
+// 保存されたアシスタント発言を、本文・思考・ツール・出典を含むカードに戻す。
+function renderAssistant(m) {
+  // 共通の HTML ひな形でカードを作り、発言時のモデル名を表示する。
+  const el = addEl("assistant", ASSISTANT_TPL);
+  el.querySelector(".meta").textContent = modelName(m.model ?? "") + (m.voice_style_name ? ` · 声色: ${m.voice_style_name}` : "");
+  // 思考内容が保存されている場合だけ、折りたたみ欄を表示する。
+  if (m.reasoning) {
+    const t = el.querySelector("details"); t.hidden = false;
+    t.querySelector("summary").textContent = `思考 (${m.reasoning.length} 文字)`;
+    t.querySelector("div").textContent = m.reasoning;
+  }
+  // Markdown の本文を安全な HTML にして表示し、ツール履歴と出典も復元する。
+  el.querySelector(".body").innerHTML = renderMd(m.content);
+  for (const ev of m.tools ?? []) upsertTool(el, ev);
+  renderSources(el, m.sources, m.content);
+}
+// アシスタント発言カードの共通ひな形。meta=補足、tools=操作履歴、
+// details=思考欄、body=回答、sources=出典。hidden は初期状態では見せない指定。
+const ASSISTANT_TPL = `<div class="meta"></div><div class="tools"></div><details class="think" hidden><summary>思考中…</summary><div></div></details><div class="body"></div><div class="sources" hidden></div>`;
+
+// ---- ウェブ検索の表示 -----------------------------------------------------
+// ツール実行イベントを、回答カード内の 1 行として追加または更新する。
+function upsertTool(el, ev) {
+  // 同じイベント ID の行があれば更新し、まだなければ新しい div を作る。
+  // CSS.escape() は ID を CSS セレクター内で安全に使うための処理。
+  const box = el.querySelector(".tools");
+  let line = box.querySelector(`[data-id="${CSS.escape(ev.id)}"]`);
+  if (!line) { line = document.createElement("div"); line.dataset.id = ev.id; box.appendChild(line); }
+  // 実行したツールに応じて、検索語・閲覧 URL・ツール名のどれを表示するか選ぶ。
+  const label = ev.name === "web_search" ? `🔍 検索: ${ev.args?.query ?? ""}`
+              : ev.name === "fetch_page" ? `📄 閲覧: ${ev.args?.url ?? ""}` : `🔧 ${ev.name}`;
+  // running は処理中、error は失敗。それ以外は成功として件数またはチェックを付ける。
+  const tail = ev.status === "running" ? " …"
+             : ev.status === "error" ? ` ✗ ${ev.error ?? ""}`
+             : ev.name === "web_search" ? ` ✓ ${ev.sources?.length ?? 0} 件` : " ✓";
+  // textContent は HTML として解釈せず文字として表示する。title はホバー時の全文。
+  line.textContent = label + tail;
+  line.className = ev.status === "error" ? "error" : "";
+  line.title = line.textContent;
+}
+// 検索で得た出典を、回答の下にリンクとして表示する。
+function renderSources(el, sources, content) {
+  const box = el.querySelector(".sources");
+  // 出典がなければ欄を隠す。
+  if (!sources?.length) { box.hidden = true; return; }
+  // 回答本文に [1] のような番号があれば、引用された出典だけを優先して並べる。
+  const cited = sources.filter(s => content.includes(`[${s.n}]`));
+  const list = cited.length ? cited : sources;
+  // a の href がリンク先。target="_blank" で新しいタブ、rel は新タブ側からの操作を制限する。
+  // タイトルと URL は esc() で HTML 特殊文字を変換してから埋め込む。
+  box.innerHTML = `<b>出典${cited.length ? "" : " (参照候補)"}</b><ol>` + list.map(s =>
+    `<li>[${s.n}] <a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.url)}</a></li>`).join("") + "</ol>";
+  box.hidden = false;
+}
+
+// localStorage はブラウザー内に小さな設定値を保存する仕組み。
+// checked の真偽を文字列 "1" / "0" として保存する。利用不可でも画面は使える。
+function storePref(id, key) { try { localStorage.setItem(key, $(id).checked ? "1" : "0"); } catch {} }
+// 履歴保存チェックボックス専用の短い呼び出し口。
+function storeSavePref() { storePref("save", "saveHistory"); }
+// 前回のチェック状態を復元する。ブラウザーが保存を禁止していても続行する。
+try {
+  $("save").checked = localStorage.getItem("saveHistory") === "1";
+  $("web").checked = localStorage.getItem("webSearch") === "1";
+  $("autoStyle").checked = localStorage.getItem("autoVoiceStyle") !== "0";
+} catch {}
+// 最初の空の会話を用意する。
+newConv();
+
+// モデルの回答を Markdown として表示できる HTML に変える。
+function renderMd(text) {
+  // 両方の外部ライブラリが読めた場合だけ Markdown を HTML 化し、DOMPurify で無害化する。
+  if (window.marked && window.DOMPurify) return DOMPurify.sanitize(marked.parse(text));
+  // 外部ライブラリが使えない場合は文字として表示し、改行だけ <br> に変える。
+  // textContent を一度経由することで、回答内の HTML タグは実行されない。
+  const d = document.createElement("div"); d.textContent = text; return d.innerHTML.replace(/\n/g, "<br>");
+}
+// 新しい発言が追加されたら会話欄を一番下へ移動する。
+function scrollDown() { const s = $("scroll"); s.scrollTop = s.scrollHeight; }
+// cls を持つ発言カードを作り、会話欄へ追加して、その DOM 要素を返す。
+function addEl(cls, html) {
+  // 初期案内があれば消す。?. は要素がないときにエラーにしない書き方。
+  $("empty")?.remove();
+  // className に "msg user" などを設定し、共通 CSS と役割別 CSS を適用する。
+  // html 引数には、このファイル内で定義した固定のひな形を渡す。
+  const el = document.createElement("div"); el.className = "msg " + cls; el.innerHTML = html;
+  $("log").appendChild(el); scrollDown(); return el;
+}
+// モデル ID に対応する表示名を探す。見つからなければ ID をそのまま使う。
+function modelName(id) { return state.status?.models.find(m => m.id === id)?.name ?? id; }
+
+// サーバーの状態を取得し、モデル一覧・バッジ・ボタンの状態を画面に反映する。
+async function refresh() {
+  // /api/status が現在のモデル一覧、起動中モデル、loading/ready/error などを返す。
+  const st = await (await fetch("/api/status")).json();
+  const first = !state.status;
+  state.status = st;
+  // 初回表示、またはモデル数が変わった場合に選択肢を作り直す。
+  if (first || $("model").options.length !== st.models.length) {
+    $("model").innerHTML = st.models.map(m => `<option value="${m.id}">${m.name}</option>`).join("");
+    if (st.active) $("model").value = st.active;
+  }
+  // 状態に応じたクラスを付けると、CSS の .badge.ready などで色が切り替わる。
+  const b = $("badge");
+  b.className = "badge " + st.status;
+  b.textContent = st.active ? `${modelName(st.active)}: ${st.status}` : st.status;
+  // プルダウンで選択中のモデルの説明を表示する。
+  $("desc").textContent = st.models.find(m => m.id === $("model").value)?.description ?? "";
+  // 回答の受信中、またはモデルが未起動なら送信できない。ロード中も切り替えを止める。
+  const busy = !!state.controller;
+  $("sendBtn").disabled = busy || st.status !== "ready";
+  $("loadBtn").disabled = st.status === "loading";
+  // 同じ起動エラーを何度も表示しないよう lastError と比較する。
+  if (st.status === "error" && st.error && state.lastError !== st.error) {
+    state.lastError = st.error;
+    addEl("error", "起動に失敗しました:\n" + st.error.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])));
+  }
+  // 以前の予約を取り消してから次回の状態確認を予約する。ロード中は 1 秒、それ以外は 5 秒。
+  clearTimeout(state.timer);
+  state.timer = setTimeout(refresh, st.status === "loading" ? 1000 : 5000);
+}
+
+// 「切り替え」ボタンから呼ばれ、選択したモデルの起動を API に依頼する。
+async function loadModel() {
+  stopSpeech();
+  state.lastError = null;
+  await fetch(`/api/models/${$("model").value}/load`, { method: "POST" });
+  // 起動は非同期なので、まず現在の loading 状態などを読み直す。
+  refresh();
+}
+
+// 音声エンジンの話者一覧から、この画面で選べるスタイルを取得する。
+async function refreshVoices() {
+  try {
+    const res = await fetch("/api/voice/voices");
+    if (!res.ok) throw new Error("音声エンジンが起動していません");
+    const voices = await res.json();
+    state.voices = voices;
+    const selected = $("voiceSpeaker").value;
+    $("voiceSpeaker").replaceChildren();
+    for (const voice of voices) {
+      const option = document.createElement("option");
+      option.value = voice.key;
+      option.textContent = `${voice.name}（${voice.engine === "voicevox" ? "VOICEVOX" : "AivisSpeech"}）`;
+      $("voiceSpeaker").appendChild(option);
+    }
+    if (selected && voices.some(voice => voice.key === selected)) $("voiceSpeaker").value = selected;
+    $("voiceSpeaker").disabled = !voices.length;
+    updateVoiceStyles();
+    $("voiceStatus").textContent = voices.length ? "音声を利用できます" : "音声が見つかりません";
+  } catch (e) {
+    $("voiceSpeaker").disabled = true;
+    $("voiceStyle").disabled = true;
+    $("voiceStatus").textContent = `${e.message}。読み上げは利用できません。`;
+  }
+}
+function updateVoiceStyles() {
+  const voice = state.voices.find(item => item.key === $("voiceSpeaker").value);
+  const selected = $("voiceStyle").value;
+  $("voiceStyle").replaceChildren();
+  for (const style of voice?.styles ?? []) {
+    const option = document.createElement("option");
+    option.value = style.id;
+    option.textContent = style.name;
+    $("voiceStyle").appendChild(option);
+  }
+  if (voice?.styles.some(style => String(style.id) === selected)) $("voiceStyle").value = selected;
+  $("voiceStyle").disabled = !voice;
+  $("voiceStyle").hidden = $("autoStyle").checked;
+}
+
+// 画面から消す装飾は読み上げにも含めない。本文の句読点がある箇所だけ先行合成する。
+function speechText(text) {
+  return text.replace(/```[\s\S]*?```/g, "")
+             .replace(/https?:\/\/\S+/g, "")
+             .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+             .replace(/[*_`#>]/g, "")
+             .replace(/\s+/g, " ").trim();
+}
+function stopSpeech() {
+  const s = state.speech;
+  if (!s) return;
+  s.stopped = true;
+  s.abort?.abort();
+  if (s.audio) { s.audio.pause(); s.audio.src = ""; }
+  s.queue.length = 0;
+  state.speech = null;
+}
+async function pumpSpeech(s) {
+  if (s.pumping) return;
+  s.pumping = true;
+  try {
+    while (!s.stopped && s.queue.length) {
+      const text = s.queue.shift();
+      if (!text) continue;
+      s.abort = new AbortController();
+      const res = await fetch("/api/voice/synthesize", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, style_id: s.styleId, engine: s.engine }), signal: s.abort.signal,
+      });
+      if (!res.ok) throw new Error(`音声合成: ${res.status}`);
+      const url = URL.createObjectURL(await res.blob());
+      try {
+        if (s.stopped) break;
+        const audio = new Audio(url);
+        s.audio = audio;
+        await new Promise((resolve, reject) => {
+          audio.onended = resolve;
+          audio.onerror = () => reject(new Error("音声を再生できません"));
+          s.abort.signal.addEventListener("abort", resolve, { once: true });
+          audio.play().catch(reject);
+        });
+        s.audio = null;
+      } finally { URL.revokeObjectURL(url); }
+    }
+  } catch (e) {
+    if (!s.stopped && e.name !== "AbortError") $("voiceStatus").textContent = `${e.message}。文字回答は利用できます。`;
+  } finally { s.pumping = false; }
+}
+function queueSpeech(s, text) {
+  if (!s || s.stopped || !text.trim()) return;
+  const cleaned = speechText(text);
+  if (cleaned) s.hasQueued = true;
+  for (let i = 0; i < cleaned.length; i += 180) s.queue.push(cleaned.slice(i, i + 180));
+  pumpSpeech(s);
+}
+function readAgain() {
+  if (state.controller || !state.lastReply || $("voiceStyle").disabled) return;
+  stopSpeech();
+  const selectedVoice = state.voices.find(voice => voice.key === $("voiceSpeaker").value);
+  const savedStyle = selectedVoice?.engine === state.lastReplyEngine
+    ? selectedVoice.styles.find(style => style.id === state.lastReplyStyle) : null;
+  const s = { engine: selectedVoice.engine, styleId: savedStyle?.id ?? Number($("voiceStyle").value), queue: [], pumping: false, stopped: false, abort: null, audio: null };
+  state.speech = s;
+  for (const sentence of speechText(state.lastReply).match(/[^。！？!?\n]+[。！？!?\n]?/g) ?? []) queueSpeech(s, sentence);
+}
+
+// ブラウザーで録音し、発話が認識できたら既存の送信処理へ渡す。
+async function toggleRecording() {
+  if (state.recorder) { state.recorder.stop(); return; }
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    $("voiceStatus").textContent = "このブラウザーではマイク録音を利用できません";
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const type = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+    const recorder = new MediaRecorder(stream, type ? { mimeType: type } : {});
+    const chunks = [];
+    recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+    recorder.onstop = async () => {
+      clearTimeout(recorder.limitTimer);
+      stream.getTracks().forEach(track => track.stop());
+      state.recorder = null;
+      $("micBtn").textContent = "🎙 録音";
+      $("micBtn").disabled = true;
+      $("voiceStatus").textContent = "文字起こし中…";
+      try {
+        const body = new FormData();
+        body.append("file", new Blob(chunks, { type: recorder.mimeType }), "recording.webm");
+        const res = await fetch("/api/voice/transcribe", { method: "POST", body });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || `HTTP ${res.status}`);
+        const transcript = (result.text ?? "").trim();
+        if (!transcript) {
+          $("voiceStatus").textContent = "発話を検出できませんでした";
+        } else {
+          $("input").value = transcript; autosize();
+          if (!state.controller && state.status?.status === "ready") {
+            $("voiceStatus").textContent = "文字起こしを送信しました";
+            send();
+          } else {
+            $("input").focus();
+            $("voiceStatus").textContent = "モデルが応答中か未起動です。文字起こしを入力欄に残しました";
+          }
+        }
+      } catch (e) { $("voiceStatus").textContent = String(e.message ?? e); }
+      finally { $("micBtn").disabled = false; }
+    };
+    recorder.start();
+    recorder.limitTimer = setTimeout(() => recorder.stop(), 29000);
+    state.recorder = recorder;
+    $("micBtn").textContent = "■ 録音終了";
+    $("voiceStatus").textContent = "録音中（最大30秒）";
+  } catch (e) { $("voiceStatus").textContent = `マイクを使えません: ${e.message}`; }
+}
+
+// メッセージ送信からストリーミング応答の表示、履歴保存までを担当する中心の関数。
+async function send() {
+  // trim() は前後の空白を除く。未入力・送信中・モデル未起動なら処理しない。
+  const text = $("input").value.trim();
+  const st = state.status;
+  if (!text || state.controller || st?.status !== "ready") return;
+  stopSpeech();
+  const selectedOption = $("voiceStyle").selectedOptions[0];
+  const selectedVoice = state.voices.find(voice => voice.key === $("voiceSpeaker").value);
+  const speech = $("speak").checked && !!selectedVoice
+    ? { engine: selectedVoice.engine, styleId: Number($("voiceStyle").value), queue: [], pumping: false, stopped: false, abort: null, audio: null }
+    : null;
+  const autoStyle = !!speech && $("autoStyle").checked && !!selectedVoice;
+  let speechStyleName = selectedOption?.textContent ?? "";
+  state.speech = speech;
+  // 入力欄を空にし、送った内容を会話データと画面の両方へ加える。
+  $("input").value = ""; autosize();
+  state.messages.push({ role: "user", content: text });
+  addEl("user", "").textContent = text;
+
+  // 空のアシスタントカードを先に作り、届いた文字を少しずつ入れていく。
+  const el = addEl("assistant", ASSISTANT_TPL);
+  el.querySelector(".meta").textContent = modelName(st.active);
+  // カード内で更新する要素を取得しておく。
+  const thinkBox = el.querySelector("details"), thinkDiv = thinkBox.querySelector("div"), body = el.querySelector(".body"), meta = el.querySelector(".meta");
+  // 回答本文、思考内容、速度情報、開始時刻を保持する。performance.now() は経過時間向き。
+  let content = "", reasoning = "", timings = null, t0 = performance.now(), completed = false;
+  let speechOffset = 0;
+  function appendContent(part) {
+    if (!part) return;
+    content += part;
+    body.innerHTML = renderMd(content);
+    if (speech) {
+      while (true) {
+        const pending = content.slice(speechOffset);
+        const match = /[。！？!?\n]/g;
+        let boundary = -1, next;
+        while ((next = match.exec(pending))) {
+          if (next.index >= 7) { boundary = next.index; break; }
+        }
+        if (boundary < 0) break;
+        queueSpeech(speech, pending.slice(0, boundary + 1));
+        speechOffset += boundary + 1;
+      }
+    }
+  }
+  // Map はツールイベントを ID ごとに管理する。sources は出典一覧。
+  const tools = new Map(); let sources = [];
+  const webSearch = $("web").checked;
+
+  // API に送る messages を作る。システムプロンプトがあれば先頭へ置き、会話を続ける。
+  const msgs = [];
+  if ($("sys").value.trim()) msgs.push({ role: "system", content: $("sys").value.trim() });
+  msgs.push(...state.messages.map(m => ({ role: m.role, content: m.content })));
+  // 温度欄が空なら null を送り、バックエンド側のモデル既定値を使う。
+  const temp = $("temp").value;
+
+  // AbortController は「中止」ボタンから進行中の fetch を止めるために使う。
+  state.controller = new AbortController();
+  $("stopBtn").hidden = false; $("sendBtn").disabled = true;
+  try {
+    // POST /api/chat へ JSON を送る。応答は 1 件の完成した JSON ではなく、
+    // 少しずつ届く Server-Sent Events（SSE）のテキストストリーム。
+    const res = await fetch("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: state.controller.signal,
+      body: JSON.stringify({ model: st.active, messages: msgs, enable_thinking: $("think").checked, web_search: webSearch,
+                             temperature: temp === "" ? null : Number(temp), voice_speaker: autoStyle ? selectedVoice.key : null }),
+    });
+    // 200 番台以外はエラーとして catch に送る。
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    // reader が受信したバイト列を取り出し、TextDecoder が文字列へ戻す。
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    // 通信の分割位置は行の境目と一致しないため、読み残しを buf に保持する。
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      // stream: true は複数の受信片にまたがる UTF-8 文字を正しく扱う指定。
+      buf += dec.decode(value, { stream: true });
+      let i;
+      // 完成した改行区切りの行を 1 行ずつ取り出し、最後の未完成部分を buf に残す。
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        // SSE の data: 行だけを処理する。空行やその他の行は飛ばす。
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        // [DONE] は応答終了を示す特別な印。
+        if (data === "[DONE]") { completed = true; continue; }
+        const j = JSON.parse(data);
+        // サーバーが送ったエラーを、通常の例外処理へ流す。
+        if (j.error) throw new Error(typeof j.error === "string" ? j.error : JSON.stringify(j.error));
+        // choices[0].delta に今回増えた文字列が入る。?. と ?? で欠けた値に備える。
+        const d = j.choices?.[0]?.delta ?? {};
+        if (j.voice_style && speech && !speech.hasQueued) {
+          const style = selectedVoice.styles.find(item => item.id === j.voice_style.id);
+          if (style) {
+            speech.styleId = style.id;
+            speechStyleName = style.name;
+            $("voiceStatus").textContent = `声色: ${selectedVoice.name}・${style.name}`;
+          }
+        }
+        // reasoning_content が届いたときだけ思考欄を表示し、追記する。
+        if (d.reasoning_content) { reasoning += d.reasoning_content; thinkBox.hidden = false; thinkDiv.textContent = reasoning; }
+        // 本文は毎回連結し、Markdown を描画し直す。
+        if (d.content) appendContent(d.content);
+        // 速度、ツールの経過、出典など、本文以外のイベントも保存して表示する。
+        if (j.timings) timings = j.timings;
+        if (j.tool_event) { tools.set(j.tool_event.id, j.tool_event); upsertTool(el, j.tool_event); }
+        if (j.sources) sources = j.sources;
+        scrollDown();
+      }
+    }
+  // ユーザーが中止した場合の AbortError は、エラー欄としては表示しない。
+  } catch (e) {
+    if (e.name === "AbortError") stopSpeech();
+    else addEl("error", String(e.message ?? e));
+  // finally は成功・失敗・中止のどれでも実行される後片付け。
+  } finally {
+    if (speech && !speech.stopped && completed) queueSpeech(speech, content.slice(speechOffset));
+    if (speech && !completed) stopSpeech();
+    // 応答時間と、サーバーが返した場合の生成トークン数・速度を発言の上部に表示する。
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    thinkBox.querySelector("summary").textContent = `思考 (${reasoning.length} 文字)`;
+    meta.textContent = `${modelName(st.active)} · ${secs}s` + (speech ? ` · 声色: ${speechStyleName}` : "") +
+      (timings ? ` · ${timings.predicted_n} tok · ${timings.predicted_per_second.toFixed(1)} tok/s` : "");
+    renderSources(el, sources, content);
+    // 本文を受け取れたときだけ会話データへ追加し、必要なら履歴を保存する。
+    // ... はオブジェクトの展開。思考・ツール・出典がある場合だけ項目を加える。
+    if (content && completed) {
+      state.lastReply = content;
+      state.lastReplyStyle = speech?.styleId ?? null;
+      state.lastReplyEngine = speech?.engine ?? null;
+      state.messages.push({ role: "assistant", content, model: st.active, ...(reasoning ? { reasoning } : {}),
+                            ...(tools.size ? { tools: [...tools.values()] } : {}), ...(sources.length ? { sources } : {}),
+                            ...(speech ? { voice_style_id: speech.styleId, voice_style_name: speechStyleName, voice_engine: speech.engine } : {}) });
+      saveConv();
+    } else if (!completed) saveConv();
+    // 次の送信を受け付け、通常の画面状態へ戻す。
+    state.controller = null; $("stopBtn").hidden = true;
+    refresh();
+  }
+}
+
+// 入力文字数に合わせて textarea の高さを更新する。いったん auto に戻して縮小も可能にする。
+function autosize() { const t = $("input"); t.style.height = "auto"; t.style.height = t.scrollHeight + "px"; }
+
+// ここからは HTML の各ボタン・入力欄に、操作時に呼ぶ関数を結び付ける。
+// onclick はクリック、onchange は選択値の変更時に実行される。
+$("loadBtn").onclick = loadModel;
+// モデル停止を依頼し、状態を読み直す。
+$("unloadBtn").onclick = async () => { stopSpeech(); await fetch("/api/unload", { method: "POST" }); refresh(); };
+// ログを新しいブラウザータブで開く。
+$("logBtn").onclick = () => window.open(`/api/models/${$("model").value}/log`, "_blank");
+// 会話データを新しくし、画面の発言と履歴選択を初期化する。
+$("newBtn").onclick = () => { if (state.controller) return; stopSpeech(); newConv(); $("hist").value = ""; $("log").innerHTML = '<div id="empty">新しい会話</div>'; };
+// 保存設定と検索設定をブラウザーに記憶する。保存をオンにした時点で現会話も保存する。
+$("save").onchange = () => { storeSavePref(); saveConv(); };
+$("web").onchange = () => storePref("web", "webSearch");
+// 履歴を選んだら開く。ただし回答受信中は会話を切り替えない。
+$("hist").onchange = () => { if ($("hist").value && !state.controller) openConv($("hist").value); };
+// モデル選択時に説明文を更新する。
+$("model").onchange = refresh;
+// 送信と中止ボタン。
+$("sendBtn").onclick = send;
+$("stopBtn").onclick = () => { stopSpeech(); state.controller?.abort(); };
+$("stopAudioBtn").onclick = stopSpeech;
+$("readAgainBtn").onclick = readAgain;
+$("micBtn").onclick = toggleRecording;
+$("speak").onchange = () => { if (!$("speak").checked) stopSpeech(); };
+$("autoStyle").onchange = () => { storePref("autoStyle", "autoVoiceStyle"); updateVoiceStyles(); };
+$("voiceSpeaker").onchange = updateVoiceStyles;
+// 入力中に高さを調整する。
+$("input").addEventListener("input", autosize);
+// Enter は送信、Shift+Enter は改行。日本語変換中の Enter（isComposing）は送信しない。
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+});
+// ページ表示直後にサーバー状態と履歴一覧を取得する。
+refresh();
+refreshHistory();
+refreshVoices();
+</script>
+<!-- body と html を閉じてページの終わりを示す。 -->
+</body>
+</html>

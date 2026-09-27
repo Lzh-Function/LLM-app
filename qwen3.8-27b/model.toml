@@ -1,0 +1,5 @@
+# 統合チャット (../llm-chat) が読み込むメタデータ
+id = "qwen3.8-27b"
+name = "Qwen3.8-27B"
+description = "Dense 27B・UD-Q4_K_M・GPU+CPU オフロード"
+order = 6

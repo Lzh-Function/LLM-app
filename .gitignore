@@ -1,0 +1,63 @@
+# Downloaded LLM and speech model files
+models/
+/llm-chat/voice-models/
+*.gguf
+*.aivmx
+*.onnx
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+
+# Downloaded inference engines and their runtime data
+/llama.cpp/bin/
+/llama-prism/bin/
+/aivisspeech/Linux-x64/
+/aivisspeech/data/
+/aivisspeech/cache/
+/voicevox/linux-cpu-x64/
+/voicevox/data/
+/voicevox/cache/
+/aivisspeech/*.7z*
+/voicevox/*.7z*
+
+# Local conversations, recordings, and logs
+/llm-chat/history/
+/docs/tmp_*
+*.log
+*.wav
+*.mp3
+*.webm
+*.sqlite*
+*.db
+
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# Python tooling
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

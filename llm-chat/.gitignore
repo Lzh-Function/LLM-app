@@ -1,0 +1,5 @@
+/.venv/
+/voice-models/
+/history/
+/chat.log
+/.ruff_cache/

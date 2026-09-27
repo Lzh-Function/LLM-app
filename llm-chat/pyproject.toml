@@ -1,0 +1,21 @@
+[project]
+name = "llm-chat"
+version = "0.1.0"
+description = "Unified local chat UI that switches between llama.cpp models"
+requires-python = ">=3.12"
+dependencies = [
+    "ddgs>=9.16.0",
+    "fastapi>=0.141.1",
+    "faster-whisper>=1.2,<2",
+    "httpx>=0.28.1",
+    "python-multipart>=0.0.20",
+    "trafilatura>=2.2.0",
+    "uvicorn[standard]>=0.53.0",
+]
+
+[project.scripts]
+llm-chat = "llm_chat:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"

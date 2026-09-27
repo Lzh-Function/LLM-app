@@ -1,0 +1,5 @@
+# 統合チャット (../llm-chat) が読み込むメタデータ
+id = "gemma4-26b-a4b"
+name = "Gemma 4 26B-A4B"
+description = "MoE 26B / active 4B・UD-Q4_K_XL・GPU+CPU オフロード"
+order = 2
