@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "faster-whisper>=1.2,<2",
     "httpx>=0.28.1",
+    "pillow>=11,<13",
     "python-multipart>=0.0.20",
     "trafilatura>=2.2.0",
     "uvicorn[standard]>=0.53.0",

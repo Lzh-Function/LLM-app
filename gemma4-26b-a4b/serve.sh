@@ -4,8 +4,14 @@
 # --fit (既定 on) が VRAM に収まるよう MoE expert を自動で CPU 側へ逃がす。
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+MMPROJ="${MMPROJ:-models/mmproj-F16.gguf}"
+if [[ ! -f "$MMPROJ" ]]; then
+    echo "画像用モデルがありません: $MMPROJ。LLM/download-mmproj.sh を実行してください。" >&2
+    exit 1
+fi
 exec ../llama.cpp/llama-server \
     --model models/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf \
+    --mmproj "$MMPROJ" --no-mmproj-offload \
     --alias gemma4-26b-a4b \
     --host "${HOST:-127.0.0.1}" --port "${PORT:-5071}" \
     --ctx-size "${CTX_SIZE:-32768}" \

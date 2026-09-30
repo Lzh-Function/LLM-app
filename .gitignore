@@ -2,6 +2,7 @@
 models/
 /llm-chat/voice-models/
 *.gguf
+*.gguf.part
 *.aivmx
 *.onnx
 *.safetensors

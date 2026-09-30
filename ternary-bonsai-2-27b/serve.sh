@@ -2,8 +2,14 @@
 # Prism ML の ternary GGUF を専用 llama.cpp fork で起動する。
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+MMPROJ="${MMPROJ:-models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf}"
+if [[ ! -f "$MMPROJ" ]]; then
+    echo "画像用モデルがありません: $MMPROJ。LLM/download-mmproj.sh を実行してください。" >&2
+    exit 1
+fi
 exec ../llama-prism/llama-server \
     --model models/Ternary-Bonsai-2-27B-PQ2_0.gguf \
+    --mmproj "$MMPROJ" --no-mmproj-offload \
     --alias ternary-bonsai-2-27b \
     --host "${HOST:-127.0.0.1}" --port "${PORT:-5071}" \
     --ctx-size "${CTX_SIZE:-16384}" \

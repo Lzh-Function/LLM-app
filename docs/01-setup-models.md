@@ -130,6 +130,24 @@ rm -rf /workspace/LLM/*/models/.cache
 
 ## 4. 起動スクリプト `serve.sh`
 
+### 画像入力用ファイル
+
+Qwen・Gemma・Bonsai の6モデルの画像用ファイルは、クローン後に以下で取得する（合計約4.6GB）。
+
+```bash
+bash /workspace/LLM/download-mmproj.sh
+```
+
+Qwen と Gemma はそれぞれの Unsloth 配布リポジトリの `mmproj-F16.gguf` を使用する。
+Bonsai は Prism ML 配布の `Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf` を使用し、
+Abliterated 版も同じファイルを共有する。ダウンロードは `.part` に保存し、完了後に正式名へ変更する。
+各 `serve.sh` は `--mmproj` でこのファイルを読み込み、未取得なら取得方法を表示して終了する。
+`--no-mmproj-offload` で画像エンコーダーを CPU に配置し、VRAM の追加消費を抑える。
+
+2026-09-29 に6モデルすべてを既定の起動設定で起動し、統合チャット API 経由で画像を送信した。
+全モデル（Hikari07jp の Abliterated 版を含む）が、テスト画像の「赤い円と青い四角」を正しく回答した。
+添付の使い方は [llm-chat/README.md](../llm-chat/README.md#画像添付) を参照。
+
 各モデルディレクトリに置く。**単体で OpenAI 互換 API サーバーとして使える**し、チャット UI からも呼ばれる。
 環境変数 `HOST` / `PORT` / `CTX_SIZE` で上書きでき、追加引数は `"$@"` でそのまま渡る。
 

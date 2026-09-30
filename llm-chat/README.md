@@ -21,6 +21,30 @@ uv run llm-chat          # http://localhost:5070
   `.md` (閲覧用) に保存する。オフの間は何も書き出さない (設定はブラウザに記憶)。
   「過去の会話…」から保存済みの会話を開いて続きを話せる
 
+## 画像添付
+
+「画像添付」から PNG・JPEG・WebP を選ぶか、入力欄へ画像を貼り付ける。
+1回の発言に最大4枚を添付でき、送信前に削除できる。サムネイルを押すと拡大表示する。
+画像だけの送信も可能。元画像は1枚20MiB・2000万画素以下で、ブラウザー内で長辺1600px以下の
+JPEGに変換する（透明部分は白背景、アニメーションは静止画になる）。
+
+対応モデルは Qwen3.5-9B、Qwen3.6-35B-A3B、Qwen3.8-27B、Gemma 4 26B-A4B、
+Ternary Bonsai 2 27B とその Abliterated 版。Dolphin はテキストのみ。
+画像付きの会話を Dolphin に切り替えた場合は送信できないため、画像対応モデルへ戻すか新しい会話を開始する。
+画像は会話の続きにも渡され、「履歴を保存」がオンの場合だけ JSON・Markdown に画像データも保存する。
+過去の会話を開くと画像も復元される。音声読み上げ・ウェブ検索も併用できる。
+
+画像用モデルを未取得の環境では、先に以下を実行する。
+
+```bash
+bash /workspace/LLM/download-mmproj.sh
+```
+
+各 `model.toml` の `mmproj` に画像用ファイルのパスを指定し、`serve.sh` から読み込む。
+Bonsai の2モデルは親モデルの Q8_0 projector を共有する。画像エンコーダーは CPU で処理し、
+12GB VRAM でテキストモデルの配置を維持する。画像付きの最初の応答はテキストのみの場合より時間がかかる。
+単体起動では `MMPROJ` 環境変数でパスを変更できる。
+
 ## 音声チャット
 
 ブラウザーの録音ボタンで発話を文字起こしし、認識できたら自動送信する。
@@ -73,5 +97,7 @@ uv run llm-chat          # http://localhost:5070
 と `model.toml` (`id`, `name`, `description`, `order`) を作ればアプリ再起動で一覧に出る。
 Bonsai 2 のように思考オンで `reasoning_effort=medium` を使うモデルには
 `thinking_mode = "reasoning_effort"` を追加する。
+画像対応モデルには `mmproj = "models/mmproj-F16.gguf"` のように画像用ファイルの相対パスを追加し、
+`serve.sh` に `--mmproj` を設定する。
 
 各 `serve.sh` は単体でも実行でき、`http://127.0.0.1:5071/v1` を OpenAI 互換 API として使える。

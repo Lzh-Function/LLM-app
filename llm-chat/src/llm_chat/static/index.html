@@ -102,6 +102,14 @@
   .row { display: flex; gap: 8px; align-items: flex-end; }
   /* flex: 1 で入力欄を広げる。高さは JS の autosize() でも更新する。 */
   #input { flex: 1; resize: none; min-height: 44px; max-height: 40vh; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg); }
+  .images { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  .image-card { position: relative; max-width: 150px; }
+  .image-card img { display: block; width: 140px; height: 110px; object-fit: contain; border: 1px solid var(--line); border-radius: 6px; cursor: zoom-in; }
+  .image-card small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .image-card .remove { position: absolute; right: 2px; top: 2px; padding: 0 6px; background: var(--panel); }
+  #imageStatus { font-size: 12px; color: var(--muted); }
+  #imageDialog { max-width: 95vw; max-height: 95vh; background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
+  #imageDialog img { display: block; max-width: 85vw; max-height: 80vh; object-fit: contain; }
   #voiceStatus { color: var(--muted); font-size: 12px; min-height: 18px; }
   /* 会話がまだないときの案内文。 */
   #empty { color: var(--muted); text-align: center; margin-top: 20vh; }
@@ -155,7 +163,11 @@
   <div class="wrap">
     <!-- system ロールの指示として、各リクエストの先頭に送る任意の入力。 -->
     <input id="sys" placeholder="システムプロンプト (任意)">
+    <div id="attachments" class="images"></div>
+    <div id="imageStatus" role="status" aria-live="polite"></div>
+    <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
     <div class="row">
+      <button id="attachBtn" type="button">画像添付</button>
       <!-- rows="1" で開始し、入力に応じて JS が高さを増やす。 -->
       <textarea id="input" rows="1" placeholder="メッセージを入力 (Enter で送信 / Shift+Enter で改行)"></textarea>
       <button id="micBtn" type="button" title="録音を開始・終了">🎙 録音</button>
@@ -167,20 +179,118 @@
   </div>
 </footer>
 
+<dialog id="imageDialog"><button id="closeImage" type="button">閉じる</button><img id="fullImage" alt="添付画像"></dialog>
 <!-- script 内は画面を動かす JavaScript。末尾に置くので、上の HTML 要素を取得できる。 -->
 <script>
 // $ は id から HTML 要素を取得する短い関数。例: $("input") は入力欄を返す。
 const $ = (id) => document.getElementById(id);
 // state は画面全体で共有する現在の状態。status はサーバー状態、messages は会話本文、
 // controller は進行中の通信を中止するためのオブジェクト、conv は現在の会話 ID など。
-const state = { status: null, messages: [], controller: null, conv: null, recorder: null, speech: null, voices: [], lastReply: "", lastReplyStyle: null, lastReplyEngine: null };
+const state = { pendingImages: [], imageLoading: false, imageRevision: 0, status: null, messages: [], controller: null, conv: null, recorder: null, speech: null, voices: [], lastReply: "", lastReplyStyle: null, lastReplyEngine: null };
 // HTML に文字列を埋め込む前に、< や & などを無害な表記に変換する。
 // 例えば <script> をそのまま HTML として実行させないための処理。
 const esc = (s) => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
+// ---- 画像添付 -------------------------------------------------------------
+function imageModelReady() {
+  return state.status?.models.find(m => m.id === state.status.active)?.images_ready === true;
+}
+function updateImageControls() {
+  const selected = state.status?.models.find(m => m.id === $("model").value);
+  const busy = !!state.controller || state.imageLoading;
+  $("attachBtn").disabled = busy || !selected?.images_ready;
+  $("sendBtn").disabled = busy || state.status?.status !== "ready" ||
+    (!imageModelReady() && (state.pendingImages.length > 0 || state.messages.some(m => m.images?.length)));
+  $("attachBtn").title = selected?.supports_images
+    ? (selected.images_ready ? "PNG・JPEG・WebP、最大4枚。画像の貼り付けも可能です" : "画像用モデルを取得してください")
+    : "このモデルは画像入力に対応していません";
+  for (const button of $("attachments").querySelectorAll("button")) button.disabled = busy;
+}
+function showImage(dataUrl, name) {
+  $("fullImage").src = dataUrl; $("fullImage").alt = name;
+  $("imageDialog").showModal();
+}
+function imageCards(box, images, removable = false) {
+  box.replaceChildren();
+  images.forEach((image, index) => {
+    const card = document.createElement("div"); card.className = "image-card";
+    const img = document.createElement("img"); img.src = image.data_url; img.alt = image.name;
+    img.tabIndex = 0; img.setAttribute("role", "button"); img.title = "画像を拡大";
+    img.onclick = () => showImage(image.data_url, image.name);
+    img.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); img.click(); } };
+    const label = document.createElement("small"); label.textContent = image.name; label.title = image.name;
+    card.append(img, label);
+    if (removable) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "remove";
+      button.textContent = "×"; button.setAttribute("aria-label", image.name + "を削除");
+      button.onclick = () => { state.pendingImages.splice(index, 1); renderPendingImages(); };
+      card.append(button);
+    }
+    box.append(card);
+  });
+}
+function renderPendingImages() {
+  imageCards($("attachments"), state.pendingImages, true);
+  $("imageStatus").textContent = state.pendingImages.length ? `${state.pendingImages.length}/4枚 · 画像だけでも送信できます` : "";
+  updateImageControls();
+}
+function clearImages() {
+  state.imageRevision++; state.pendingImages = []; $("imageFiles").value = "";
+  renderPendingImages();
+}
+function renderUser(message) {
+  const el = addEl("user", ""), text = document.createElement("div");
+  text.textContent = message.content; el.append(text);
+  if (message.images?.length) {
+    const box = document.createElement("div"); box.className = "images";
+    imageCards(box, message.images); el.append(box);
+  }
+  scrollDown();
+}
+async function prepareImage(file) {
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) throw new Error("PNG・JPEG・WebP を選んでください");
+  if (file.size > 20 * 1024 * 1024) throw new Error("元画像は1枚20MiB以下にしてください");
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image(); img.src = url; await img.decode();
+    if (img.naturalWidth * img.naturalHeight > 20_000_000) throw new Error("画像は2000万画素以下にしてください");
+    const scale = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext("2d"); ctx.fillStyle = "white"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const data_url = canvas.toDataURL("image/jpeg", 0.9);
+    if (data_url.length > 5 * 1024 * 1024 * 4 / 3) throw new Error("変換後の画像が5MiBを超えています");
+    return { name: (file.name || "貼り付け画像").slice(0, 255), data_url };
+  } finally { URL.revokeObjectURL(url); }
+}
+async function attachImages(files) {
+  if (state.controller || state.imageLoading) return;
+  const selected = state.status?.models.find(m => m.id === $("model").value);
+  if (!selected?.images_ready) { $("imageStatus").textContent = "画像対応モデルを選択してください"; return; }
+  const revision = state.imageRevision;
+  state.imageLoading = true; updateImageControls();
+  const errors = [];
+  try {
+    for (const file of files) {
+      if (state.pendingImages.length >= 4) { errors.push("画像は最大4枚です"); break; }
+      try {
+        const image = await prepareImage(file);
+        if (revision !== state.imageRevision) break;
+        state.pendingImages.push(image);
+      } catch (e) { errors.push(`${file.name}: ${e.message}`); }
+    }
+  } finally {
+    state.imageLoading = false; $("imageFiles").value = ""; renderPendingImages();
+    if (revision === state.imageRevision && errors.length) $("imageStatus").textContent = errors.join(" / ");
+  }
+}
+
 // ---- 会話履歴 -------------------------------------------------------------
 // 新しい会話の ID と作成日時を用意し、画面上の会話データを空にする。
 function newConv() {
+  clearImages();
   state.lastReply = "";
   state.lastReplyStyle = null;
   state.lastReplyEngine = null;
@@ -201,7 +311,7 @@ async function saveConv() {
   const c = state.conv, first = state.messages.find(m => m.role === "user")?.content ?? "";
   // サーバーに渡す JSON の元データ。改行や連続空白を 1 個の空白にして題名を 40 文字に切る。
   const body = { id: c.id, created: c.created, updated: new Date().toISOString(),
-                 title: first.replace(/\s+/g, " ").slice(0, 40), system: $("sys").value.trim(),
+                 title: (first || "画像についての会話").replace(/\s+/g, " ").slice(0, 40), system: $("sys").value.trim(),
                  messages: state.messages };
   try {
     // fetch は HTTP 通信。PUT /api/history/{id} で同じ ID の履歴を作成または更新する。
@@ -227,6 +337,7 @@ async function openConv(id) {
   stopSpeech();
   const c = await (await fetch(`/api/history/${id}`)).json();
   // 保存されていた会話 ID・発言・システムプロンプトを現在の状態へ戻す。
+  clearImages();
   state.conv = { id: c.id, created: c.created };
   state.messages = c.messages;
   const lastAssistant = [...c.messages].reverse().find(m => m.role === "assistant");
@@ -239,7 +350,7 @@ async function openConv(id) {
   // 画面の古い発言を消し、保存された発言を順番に表示する。
   $("log").innerHTML = "";
   for (const m of c.messages) {
-    if (m.role === "user") addEl("user", "").textContent = m.content;
+    if (m.role === "user") renderUser(m);
     else renderAssistant(m);
   }
 }
@@ -353,8 +464,9 @@ async function refresh() {
   $("desc").textContent = st.models.find(m => m.id === $("model").value)?.description ?? "";
   // 回答の受信中、またはモデルが未起動なら送信できない。ロード中も切り替えを止める。
   const busy = !!state.controller;
-  $("sendBtn").disabled = busy || st.status !== "ready";
-  $("loadBtn").disabled = st.status === "loading";
+  updateImageControls();
+  $("loadBtn").disabled = busy || st.status === "loading";
+  $("unloadBtn").disabled = busy;
   // 同じ起動エラーを何度も表示しないよう lastError と比較する。
   if (st.status === "error" && st.error && state.lastError !== st.error) {
     state.lastError = st.error;
@@ -535,7 +647,11 @@ async function send() {
   // trim() は前後の空白を除く。未入力・送信中・モデル未起動なら処理しない。
   const text = $("input").value.trim();
   const st = state.status;
-  if (!text || state.controller || st?.status !== "ready") return;
+  if ((!text && !state.pendingImages.length) || state.imageLoading || state.controller || st?.status !== "ready") return;
+  if (!imageModelReady() && (state.pendingImages.length || state.messages.some(m => m.images?.length))) {
+    $("imageStatus").textContent = "この会話には画像があります。画像対応モデルへ切り替えるか、新しい会話を開始してください。";
+    return;
+  }
   stopSpeech();
   const selectedOption = $("voiceStyle").selectedOptions[0];
   const selectedVoice = state.voices.find(voice => voice.key === $("voiceSpeaker").value);
@@ -547,8 +663,10 @@ async function send() {
   state.speech = speech;
   // 入力欄を空にし、送った内容を会話データと画面の両方へ加える。
   $("input").value = ""; autosize();
-  state.messages.push({ role: "user", content: text });
-  addEl("user", "").textContent = text;
+  const message = { role: "user", content: text, ...(state.pendingImages.length ? { images: [...state.pendingImages] } : {}) };
+  state.messages.push(message);
+  renderUser(message);
+  clearImages();
 
   // 空のアシスタントカードを先に作り、届いた文字を少しずつ入れていく。
   const el = addEl("assistant", ASSISTANT_TPL);
@@ -583,13 +701,14 @@ async function send() {
   // API に送る messages を作る。システムプロンプトがあれば先頭へ置き、会話を続ける。
   const msgs = [];
   if ($("sys").value.trim()) msgs.push({ role: "system", content: $("sys").value.trim() });
-  msgs.push(...state.messages.map(m => ({ role: m.role, content: m.content })));
+  msgs.push(...state.messages.map(m => ({ role: m.role, content: m.content, ...(m.images?.length ? { images: m.images } : {}) })));
   // 温度欄が空なら null を送り、バックエンド側のモデル既定値を使う。
   const temp = $("temp").value;
 
   // AbortController は「中止」ボタンから進行中の fetch を止めるために使う。
   state.controller = new AbortController();
-  $("stopBtn").hidden = false; $("sendBtn").disabled = true;
+  $("stopBtn").hidden = false; updateImageControls();
+  $("loadBtn").disabled = true; $("unloadBtn").disabled = true;
   try {
     // POST /api/chat へ JSON を送る。応答は 1 件の完成した JSON ではなく、
     // 少しずつ届く Server-Sent Events（SSE）のテキストストリーム。
@@ -693,6 +812,15 @@ $("hist").onchange = () => { if ($("hist").value && !state.controller) openConv(
 // モデル選択時に説明文を更新する。
 $("model").onchange = refresh;
 // 送信と中止ボタン。
+$("attachBtn").onclick = () => $("imageFiles").click();
+$("imageFiles").onchange = () => attachImages([...$("imageFiles").files]);
+$("input").addEventListener("paste", e => {
+  const files = [...(e.clipboardData?.items ?? [])].filter(item => item.kind === "file" && item.type.startsWith("image/"))
+    .map(item => item.getAsFile()).filter(Boolean);
+  if (files.length) { e.preventDefault(); attachImages(files); }
+});
+$("closeImage").onclick = () => $("imageDialog").close();
+$("imageDialog").addEventListener("close", () => $("fullImage").removeAttribute("src"));
 $("sendBtn").onclick = send;
 $("stopBtn").onclick = () => { stopSpeech(); state.controller?.abort(); };
 $("stopAudioBtn").onclick = stopSpeech;

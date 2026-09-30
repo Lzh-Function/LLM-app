@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import agent, voice, voice_control
+from .images import ChatMessage
 
 APP_DIR = Path(__file__).resolve().parents[2]  # .../LLM/llm-chat
 LLM_ROOT = Path(os.environ.get("LLM_ROOT", APP_DIR.parent))
@@ -46,6 +47,11 @@ class ModelInfo:
     order: int
     dir: Path
     thinking_mode: str = "enable_thinking"
+    mmproj: str | None = None
+
+    @property
+    def images_ready(self) -> bool:
+        return bool(self.mmproj and (self.dir / self.mmproj).is_file())
 
     @property
     def log_path(self) -> Path:
@@ -67,6 +73,7 @@ def discover_models() -> dict[str, ModelInfo]:
             order=int(meta.get("order", 100)),
             dir=d,
             thinking_mode=meta.get("thinking_mode", "enable_thinking"),
+            mmproj=meta.get("mmproj"),
         )
     return dict(sorted(models.items(), key=lambda kv: kv[1].order))
 
@@ -105,7 +112,8 @@ class ModelManager:
             "error": self.error,
             "loaded_at": self.loaded_at,
             "models": [
-                {"id": m.id, "name": m.name, "description": m.description}
+                {"id": m.id, "name": m.name, "description": m.description,
+                 "supports_images": bool(m.mmproj), "images_ready": m.images_ready}
                 for m in self.models.values()
             ],
         }
@@ -201,7 +209,7 @@ app = FastAPI(title="LLM Chat", lifespan=lifespan)
 
 class ChatRequest(BaseModel):
     model: str
-    messages: list[dict]
+    messages: list[ChatMessage]
     temperature: float | None = None
     max_tokens: int | None = None
     enable_thinking: bool = True
@@ -249,6 +257,12 @@ async def log(model_id: str, n: int = 200) -> str:
 async def chat(req: ChatRequest) -> StreamingResponse:
     if manager.active != req.model or manager.status != "ready":
         raise HTTPException(409, "model is not ready")
+    if any(message.images for message in req.messages):
+        model = manager.models[req.model]
+        if not model.mmproj:
+            raise HTTPException(400, "このモデルは画像入力に対応していません。画像対応モデルへ切り替えてください")
+        if not model.images_ready:
+            raise HTTPException(409, "画像用モデルが未取得です。画像用モデルを取得して再起動してください")
 
     voice_styles = None
     if req.voice_speaker:
@@ -257,7 +271,7 @@ async def chat(req: ChatRequest) -> StreamingResponse:
         except HTTPException as exc:
             if exc.status_code != 503:
                 raise
-    messages = [dict(message) for message in req.messages]
+    messages = [message.backend_message() for message in req.messages]
     if voice_styles:
         voice_prompt = voice_control.prompt(req.voice_speaker.partition(":")[2] or req.voice_speaker, voice_styles)
         if messages and messages[0].get("role") == "system":
@@ -319,9 +333,7 @@ async def chat(req: ChatRequest) -> StreamingResponse:
 HISTORY_ID = re.compile(r"^[0-9A-Za-z_-]{1,80}$")
 
 
-class HistoryMessage(BaseModel):
-    role: str
-    content: str
+class HistoryMessage(ChatMessage):
     model: str | None = None
     reasoning: str | None = None
     tools: list[dict] | None = None
@@ -358,6 +370,9 @@ def to_markdown(conv: Conversation) -> str:
     for m in conv.messages:
         if m.role == "user":
             out += ["", "## User", "", m.content]
+            for image in m.images:
+                label = re.sub(r"[\[\]\\\r\n]", "_", image.name)
+                out += ["", f"![{label}]({image.data_url})"]
         else:
             out += ["", f"## Assistant ({m.model or '?'})", ""]
             if m.reasoning:
