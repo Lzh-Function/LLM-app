@@ -140,6 +140,7 @@
   <label class="opt"><input type="checkbox" id="think" checked> 思考モード</label>
   <label class="opt"><input type="checkbox" id="speak"> 🔊 読み上げ</label>
   <select id="voiceSpeaker" aria-label="読み上げ話者" disabled><option>音声を確認中…</option></select>
+  <button id="voiceRefreshBtn" type="button">音声再確認</button>
   <label class="opt" title="話者は選択欄で指定し、その話者の声色を回答ごとに LLM が選びます"><input type="checkbox" id="autoStyle" checked> 声色を自動選択</label>
   <select id="voiceStyle" aria-label="手動の声色" disabled hidden></select>
   <button id="stopAudioBtn" type="button">音声停止</button>
@@ -488,8 +489,15 @@ async function loadModel() {
 
 // 音声エンジンの話者一覧から、この画面で選べるスタイルを取得する。
 async function refreshVoices() {
+  if (state.voiceChecking) return;
+  clearTimeout(state.voiceRetryTimer);
+  state.voiceChecking = true;
+  $("voiceRefreshBtn").disabled = true;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  let available = false;
   try {
-    const res = await fetch("/api/voice/voices");
+    const res = await fetch("/api/voice/voices", { signal: controller.signal });
     if (!res.ok) throw new Error("音声エンジンが起動していません");
     const voices = await res.json();
     state.voices = voices;
@@ -503,12 +511,32 @@ async function refreshVoices() {
     }
     if (selected && voices.some(voice => voice.key === selected)) $("voiceSpeaker").value = selected;
     $("voiceSpeaker").disabled = !voices.length;
+    available = voices.length > 0;
+    $("speak").disabled = !available;
+    $("readAgainBtn").disabled = !available;
+    if (!available) {
+      const option = document.createElement("option");
+      option.textContent = "音声が見つかりません";
+      $("voiceSpeaker").appendChild(option);
+    }
     updateVoiceStyles();
-    $("voiceStatus").textContent = voices.length ? "音声を利用できます" : "音声が見つかりません";
+    $("voiceStatus").textContent = available ? "音声を利用できます" : "音声が見つかりません。10秒後に再確認します。";
   } catch (e) {
+    stopSpeech();
+    state.voices = [];
+    const option = document.createElement("option");
+    option.textContent = e.name === "AbortError" ? "音声の確認がタイムアウトしました" : "音声エンジンに接続できません";
+    $("voiceSpeaker").replaceChildren(option);
     $("voiceSpeaker").disabled = true;
-    $("voiceStyle").disabled = true;
-    $("voiceStatus").textContent = `${e.message}。読み上げは利用できません。`;
+    $("speak").disabled = true;
+    $("readAgainBtn").disabled = true;
+    updateVoiceStyles();
+    $("voiceStatus").textContent = `${option.textContent}。10秒後に再確認します。`;
+  } finally {
+    clearTimeout(timeout);
+    state.voiceChecking = false;
+    $("voiceRefreshBtn").disabled = false;
+    if (!available) state.voiceRetryTimer = setTimeout(refreshVoices, 10000);
   }
 }
 function updateVoiceStyles() {
@@ -825,6 +853,7 @@ $("sendBtn").onclick = send;
 $("stopBtn").onclick = () => { stopSpeech(); state.controller?.abort(); };
 $("stopAudioBtn").onclick = stopSpeech;
 $("readAgainBtn").onclick = readAgain;
+$("voiceRefreshBtn").onclick = refreshVoices;
 $("micBtn").onclick = toggleRecording;
 $("speak").onchange = () => { if (!$("speak").checked) stopSpeech(); };
 $("autoStyle").onchange = () => { storePref("autoStyle", "autoVoiceStyle"); updateVoiceStyles(); };

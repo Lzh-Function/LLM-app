@@ -32,6 +32,7 @@ VOICEVOX_SPEAKERS = {
     "ずんだもん", "冥鳴ひまり", "中国うさぎ", "東北ずん子", "東北きりたん"
 }
 ENGINE_URLS = {"aivis": AIVIS_URL, "voicevox": VOICEVOX_URL}
+SPEAKERS_TIMEOUT_S = 5
 
 _stt_model = None
 _stt_model_lock = threading.Lock()
@@ -95,14 +96,18 @@ async def _speakers(engine: str) -> list[dict]:
     if engine not in ENGINE_URLS:
         raise HTTPException(422, "利用できない音声エンジンです")
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
+        # HTTPX のタイムアウトは通信段階ごと。応答が少しずつ届く場合も全体で打ち切る。
+        async with (
+            asyncio.timeout(SPEAKERS_TIMEOUT_S),
+            httpx.AsyncClient(timeout=SPEAKERS_TIMEOUT_S) as client,
+        ):
             response = await client.get(f"{ENGINE_URLS[engine]}/speakers")
             response.raise_for_status()
             speakers = response.json()
             if engine == "aivis":
                 return [s for s in speakers if s.get("speaker_uuid") in ALLOWED_SPEAKERS]
             return [s for s in speakers if s.get("name") in VOICEVOX_SPEAKERS]
-    except (httpx.HTTPError, ValueError) as exc:
+    except (TimeoutError, httpx.HTTPError, ValueError) as exc:
         raise HTTPException(503, f"{engine} に接続できません: {exc}") from exc
 
 
@@ -123,12 +128,16 @@ async def styles_for_speaker(name: str) -> list[dict]:
 async def voices() -> list[dict]:
     result = []
     errors = []
-    for engine in ENGINE_URLS:
-        try:
-            speakers = await _speakers(engine)
-        except HTTPException as exc:
-            errors.append(exc.detail)
+    engines = list(ENGINE_URLS)
+    results = await asyncio.gather(
+        *(_speakers(engine) for engine in engines), return_exceptions=True
+    )
+    for engine, speakers in zip(engines, results):
+        if isinstance(speakers, HTTPException):
+            errors.append(speakers.detail)
             continue
+        if isinstance(speakers, BaseException):
+            raise speakers
         for speaker in speakers:
             result.append({
                 "key": f"{engine}:{speaker['name']}",
