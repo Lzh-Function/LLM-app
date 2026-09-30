@@ -2,10 +2,11 @@
 
 ## 1. 概要
 
-- ブラウザから 3 モデルを**いつでも切り替えて**チャットできる UI。ポート **5070** (devcontainer で転送済み)。
+- ブラウザから 8 モデルを**いつでも切り替えて**チャットできる UI。ポート **5070** (devcontainer で転送済み)。
 - `/workspace/LLM/*/model.toml` を持つディレクトリを自動検出する。
-  Bonsai 2 の `thinking_mode = "reasoning_effort"` は思考オンを medium に設定する。
+  Bonsai 2 と Qwen3.8 Flash Next の `thinking_mode = "reasoning_effort"` は思考オンを medium に設定する。
 - 選択されたモデルの `serve.sh` を内部ポート **5071** で 1 つだけ起動し、チャットを中継する。
+  Qwen3.8 Flash Next は [Strata](07-strata.md)、その他は llama-server を使用する。
 - 会話履歴の保存 (任意)、ウェブ検索 (任意、[03](03-web-search.md))。
 
 ```

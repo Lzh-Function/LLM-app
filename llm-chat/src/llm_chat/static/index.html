@@ -799,9 +799,11 @@ async function send() {
     if (speech && !completed) stopSpeech();
     // 応答時間と、サーバーが返した場合の生成トークン数・速度を発言の上部に表示する。
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    const tokenStats = timings ? ` · ${timings.predicted_n} tok` +
+      (Number.isFinite(timings.predicted_per_second) ? ` · ${timings.predicted_per_second.toFixed(1)} tok/s` : "") : "";
     thinkBox.querySelector("summary").textContent = `思考 (${reasoning.length} 文字)`;
     meta.textContent = `${modelName(st.active)} · ${secs}s` + (speech ? ` · 声色: ${speechStyleName}` : "") +
-      (timings ? ` · ${timings.predicted_n} tok · ${timings.predicted_per_second.toFixed(1)} tok/s` : "");
+      tokenStats;
     renderSources(el, sources, content);
     // 本文を受け取れたときだけ会話データへ追加し、必要なら履歴を保存する。
     // ... はオブジェクトの展開。思考・ツール・出典がある場合だけ項目を加える。

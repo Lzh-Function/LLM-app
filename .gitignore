@@ -14,6 +14,8 @@ models/
 # Downloaded inference engines and their runtime data
 /llama.cpp/bin/
 /llama-prism/bin/
+/strata/
+/Strata-data/
 /aivisspeech/Linux-x64/
 /aivisspeech/data/
 /aivisspeech/cache/

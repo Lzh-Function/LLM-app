@@ -1,0 +1,6 @@
+id = "qwen3.8-flash-next"
+name = "Qwen3.8 Flash Next 125B (Strata)"
+description = "MoE 125B / active 6B・IQ2_XS・Strata・32K・画像対応"
+order = 8
+thinking_mode = "reasoning_effort"
+mmproj = "../Strata-data/models/mmproj-Qwen3.8-Flash-Next-BF16.gguf"

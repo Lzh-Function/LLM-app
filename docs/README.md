@@ -1,6 +1,6 @@
 # ローカル LLM 環境ドキュメント
 
-WSL2 + Dev Container 上で、llama.cpp を使ってローカル LLM を動かし、
+WSL2 + Dev Container 上で、llama.cpp と Strata を使ってローカル LLM を動かし、
 統合チャット UI・ウェブ検索・Codex 連携まで行うための構築記録。
 
 ## 環境
@@ -24,6 +24,9 @@ WSL2 + Dev Container 上で、llama.cpp を使ってローカル LLM を動か�
 │   ├── llama-server      LD_LIBRARY_PATH を設定するラッパー
 │   └── VERSION
 ├── llama-prism/          Bonsai 2 専用の Prism ML fork (CUDA 12.8, b10735)
+├── strata/              Qwen3.8 Flash Next 用 Strata (CUDA 13.0)
+├── Strata-data/         Flash Next IQ2_XS、MTP、画像エンコーダー
+├── qwen3.8-flash-next/   統合 UI から Strata を起動するラッパー
 ├── ternary-bonsai-2-27b/             PQ2_0 (7.21GB)
 ├── ternary-bonsai-2-27b-abliterated/ Hikari07jp v0.1 PQ2_0 (7.21GB)
 ├── qwen3.8-27b/          Dense 27B UD-Q4_K_M (16.5GB)
@@ -54,7 +57,7 @@ codex -p qwen-local                                                # ターミ�
 > VRAM 12GB では **同時に 1 モデルしか載らない**。チャット UI と Codex 用サーバーは同時に使わないこと。
 
 Bonsai 2 の 2 モデルは Prism ML fork を使い、既定コンテキストは VRAM を考慮して 16K。
-Hikari07jp 版は v0.1 プレビュー。思考切替は両モデルだけ `reasoning_effort` に合わせている。
+Hikari07jp 版は v0.1 プレビュー。Bonsai 2 と Flash Next の思考切替は `reasoning_effort` に合わせている。
 
 ## ドキュメント一覧
 
@@ -64,6 +67,7 @@ Hikari07jp 版は v0.1 プレビュー。思考切替は両モデルだけ `reas
 4. [04-codex.md](04-codex.md) — Codex CLI との連携、コンテキスト長と速度
 5. [05-operations.md](05-operations.md) — 運用・ログ・メモリ・トラブルシューティング
 6. [06-voice-chat.md](06-voice-chat.md) — Dev Container 内の AivisSpeech、録音、文字起こし、読み上げ
+7. [07-strata.md](07-strata.md) — Qwen3.8 Flash Next IQ2_XS、Strata の導入と実測、起動手順
 
 ## 今後の拡張候補
 

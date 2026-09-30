@@ -1,7 +1,7 @@
 # llm-chat — 統合ローカル LLM チャット
 
 `/workspace/LLM/*/model.toml` を持つディレクトリを LLM として自動検出し、
-ブラウザから選んだモデルの `serve.sh` (llama-server) を起動してチャットする。
+ブラウザから選んだモデルの `serve.sh` (llama-server または Strata) を起動してチャットする。
 VRAM 12GB では 1 モデルずつしか載らないため、切り替え時は前のモデルを停止してから起動する。
 
 ## 起動
@@ -14,7 +14,7 @@ uv run llm-chat          # http://localhost:5070
 - 画面上部でモデルを選び「切り替え」→ バッジが `ready` になったら送信可能
 - 会話の途中でモデルを切り替えても履歴はそのまま引き継がれる
 - 「思考モード」オフで `enable_thinking=false` をテンプレートに渡す。
-  Bonsai 2 ではオン時に `reasoning_effort=medium` を渡す
+  Bonsai 2 と Qwen3.8 Flash Next ではオン時に `reasoning_effort=medium` を渡す
 - 温度欄が空ならモデルごとの既定値 (`serve.sh` の `--temp`)
 - 「ログ」で選択中モデルの `server.log` を表示
 - 「履歴を保存」オンで、応答ごとに会話を `history/<日時>-<id>.json` (再読み込み用) と
@@ -29,7 +29,7 @@ uv run llm-chat          # http://localhost:5070
 JPEGに変換する（透明部分は白背景、アニメーションは静止画になる）。
 
 対応モデルは Qwen3.5-9B、Qwen3.6-35B-A3B、Qwen3.8-27B、Gemma 4 26B-A4B、
-Ternary Bonsai 2 27B とその Abliterated 版。Dolphin はテキストのみ。
+Ternary Bonsai 2 27B とその Abliterated 版、Qwen3.8 Flash Next (Strata)。Dolphin はテキストのみ。
 画像付きの会話を Dolphin に切り替えた場合は送信できないため、画像対応モデルへ戻すか新しい会話を開始する。
 画像は会話の続きにも渡され、「履歴を保存」がオンの場合だけ JSON・Markdown に画像データも保存する。
 過去の会話を開くと画像も復元される。音声読み上げ・ウェブ検索も併用できる。
@@ -39,6 +39,9 @@ Ternary Bonsai 2 27B とその Abliterated 版。Dolphin はテキストのみ�
 ```bash
 bash /workspace/LLM/download-mmproj.sh
 ```
+
+Qwen3.8 Flash Next の画像用ファイルは専用のセットアップで取得する。
+導入と実測条件は [Strata の運用手順](../docs/07-strata.md)を参照。
 
 各 `model.toml` の `mmproj` に画像用ファイルのパスを指定し、`serve.sh` から読み込む。
 Bonsai の2モデルは親モデルの Q8_0 projector を共有する。画像エンコーダーは CPU で処理し、
@@ -82,6 +85,9 @@ Bonsai の2モデルは親モデルの Q8_0 projector を共有する。画像�
 /workspace/LLM/
 ├── llama.cpp/            共有ランタイム (prebuilt CUDA 12.8, bin/ + llama-server ラッパー)
 ├── llama-prism/          Bonsai 2 専用の Prism ML 版 llama.cpp
+├── strata/              Strata 本体と専用 Python 環境
+├── Strata-data/         Flash Next の GGUF、変換済みデータ、MTP
+├── qwen3.8-flash-next/   Strata 用の serve.sh / setup.sh / model.toml
 ├── ternary-bonsai-2-27b/             Bonsai 2 PQ2_0
 ├── ternary-bonsai-2-27b-abliterated/ Hikari07jp v0.1 PQ2_0
 ├── qwen3.8-27b/          Qwen3.8-27B UD-Q4_K_M

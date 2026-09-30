@@ -16,10 +16,14 @@
 | `qwen3.8-27b` | Qwen3.8-27B | Dense 27B | UD-Q4_K_M | 16.5GB | GPU + CPU (`--fit`) |
 | `ternary-bonsai-2-27b` | Ternary Bonsai 2 27B | Dense 27B | PQ2_0 | 7.21GB | Prism ML fork / GPU |
 | `ternary-bonsai-2-27b-abliterated` | Hikari07jp v0.1 | Dense 27B | PQ2_0 | 7.21GB | Prism ML fork / GPU |
+| `qwen3.8-flash-next` | Qwen3.8 Flash Next | MoE 125B / active 6B | IQ2_XS | 約68GB | Strata / GPU + RAM + SSD |
+
+Flash Next は専用エンジン Strata を使うため、[07-strata.md](07-strata.md) の手順を参照。
 
 ## 2. llama.cpp (推論エンジン) の導入
 
-コンテナに CUDA Toolkit (nvcc) が無いため、ソースビルドではなく **公式の prebuilt CUDA バイナリ**を使用。
+llama.cpp 導入時はコンテナに CUDA Toolkit (nvcc) が無かったため、**公式の prebuilt CUDA バイナリ**を使用。
+後から Strata 用に CUDA Toolkit 13.0 を導入したが、既存の llama.cpp は同梱ランタイムで動く。
 ドライバが CUDA 13.1 なので、互換性の確実な **CUDA 12.8 版**を選んだ (RTX 50 系 = sm_120 対応)。
 
 ```bash
