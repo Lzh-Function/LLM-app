@@ -12,17 +12,31 @@
 現在の作業領域には [公式 Linux x64 リリース 1.2.0](https://github.com/Aivis-Project/AivisSpeech-Engine/releases/tag/1.2.0) と、下記 2 モデルを導入済み。別環境で再現する場合は、公式リリースの `AivisSpeech-Engine-Linux-x64-1.2.0.7z.001` を `aivisspeech/` に取得して `uvx --from py7zr py7zr x <取得したファイル> /workspace/LLM/aivisspeech` で展開する。モデルは表の AivisHub 詳細ページから AIVMX を取得し、`aivisspeech/data/AivisSpeech-Engine/Models/` に配置する。
 
 ```bash
-cd /workspace/LLM/aivisspeech
-bash serve.sh                       # 127.0.0.1:10101、CPU、8 スレッド
-
-cd /workspace/LLM/voicevox
-bash serve.sh                       # 127.0.0.1:50021、CPU、8 スレッド
-
 cd /workspace/LLM/llm-chat
 uv run llm-chat                     # http://localhost:5070
 ```
 
-それぞれ別のターミナルで起動する。終了は各ターミナルで Ctrl+C。`llm-chat` は既存どおり選択した llama-server を管理する。AivisSpeech と VOICEVOX は片方だけの起動でも利用できる。音声エンジンを後から起動した場合も、一覧取得の失敗後に10秒間隔で再確認して自動復帰する。「音声再確認」でも取得し直せる。
+`uv run llm-chat` 起動時の読み上げはOFF。UIの「読み上げ」をONにした時だけ、導入済みのAivisSpeech・VOICEVOXをバックグラウンドで起動する。
+OFFにすると再生・一覧の定期確認を止め、チャット自身が起動した両エンジンと子プロセスを終了してRAMを解放する。起動途中でもOFFにでき、再度ONにすると起動し直す。
+既定ポートは127.0.0.1:10101と127.0.0.1:50021、CPU実行。Aivis/VOICEVOXとIrodori CPU会話モードの切り替えではllama.cpp・Strataを再ロードしない。IrodoriのLarge GPU声作成・独立合成はLLMをアンロードする（[手順](08-irodori-tts.md#実装と使い方2026-10-07)）。チャットは音声の起動完了を待たずに利用できる。
+Ctrl+Cで終了すると、チャット自身が起動した音声エンジンと子プロセスも停止する。
+すでにポートが使用されている場合は新たに起動せず、既存サービスをOFF時・終了時にも停止しない。
+外部URLやパス付きプロキシURLを指定している場合、またはエンジンが未導入の場合は、自動起動の対象から外れる。
+管理処理は既存の `serve.sh` を実行する。エンジン本体とAIVMXの導入は引き続き別途行う。
+エンジン初回起動時のBERTデータ取得や、初回文字起こし時のSTTモデル取得は下記の従来動作を引き継ぐ。
+
+ON後の起動中は `/api/voice/voices` が一時的に503になることがある。画面はON中だけ10秒間隔で再確認し、起動後に自動復帰する。OFF中のAPIは空の一覧を返す。
+片方が先に起動した場合はその話者を利用でき、もう片方の起動が終わるまで一覧を再確認する。
+「音声再確認」でも取得し直せる。ターミナルには `starting speech engine` / `speech engine ready` と、失敗した場合のログ場所を表示する。
+エンジンのログは `aivisspeech/server.log` と `voicevox/server.log` に追記する。
+
+手動で管理する場合は、各エンジンを別ターミナルで先に起動し、UIの「読み上げ」をONにする。
+
+```bash
+cd /workspace/LLM/aivisspeech && bash serve.sh
+cd /workspace/LLM/voicevox && bash serve.sh
+cd /workspace/LLM/llm-chat && uv run llm-chat
+```
 
 音声一覧は両エンジンへ並行して問い合わせ、各エンジンへの問い合わせ全体を5秒で打ち切る。
 ブラウザー側も8秒で確認を打ち切り、選択欄に接続失敗・タイムアウトを表示する。
@@ -58,6 +72,24 @@ VOICEVOX の合成モデルは公式 Engine 配布物に含まれる。`voicevox
 
 ## 初回の動作確認
 
+2026-10-07の初回の起動管理検証では、両エンジンが停止した状態から起動し、6.27秒で7話者の一覧取得が成功。その後、起動時OFF・UIのON/OFFで起動停止する方式へ変更した。
+まおの初回合成は2.91秒（WAV 281,872 bytes）、ずんだもんは0.90秒（155,692 bytes）。短文「こんにちは。音声チャットのテストです。」を使用。
+ブラウザーで7話者、読み上げの有効化、話者・声色の選択、再確認後の選択維持を確認した。
+終了後は自動起動した両エンジンのポートが閉じたことも確認。
+既存サービスの再利用、起動途中の停止、終了済みlauncherが残したworkerの回収、ON/OFF API、LLM状態維持などを含む最新のテスト25件が成功。
+
+起動時OFFへの変更後は、SC117 IQ3_XXSを先にロード（55.37秒でready）し、実ブラウザーから音声ON→OFF→再ON→OFFを確認した。
+両回のONで7話者を取得し、まお・ずんだもんのWAV合成が成功。OFF中は11秒以上待っても話者一覧への定期問い合わせが発生せず、両エンジンの停止も確認した。
+起動途中のOFF、ページ再読み込み時の状態復元も成功。音声切り替え前後でLLMのロード時刻は同一で、OFF後にもStrataが「こんにちは！」と応答した。
+検証終了後、UI・LLM・両音声エンジンの検証用ポートがすべて閉じた。結果は `docs/tmp_voice-toggle-results.json` に保存。
+
+同日の同時利用検証では、両音声エンジンで合成してからSC117 IQ3_XXSをロードし、44.31秒でready。
+Strataの日本語応答「こんにちは。」をまおで合成し、WAV 105,748 bytesを取得した。
+WSL上限48GBで起動・回答・合成は成功したが、音声エンジンが加わると全エキスパートを常駐する余裕は不足した。
+Strataの安全処理が、profileで優先する約33.74GiBをRAMに保持し、残りの一部をGGUFからファイル参照するモードへ切り替えた。
+応答後の監視APIではWSL全体の使用RAM40.2GiB、GPU11,933MiB。ファイル参照はOSのページキャッシュを使う場合もある。
+音声なしで測った生成速度を音声併用時の速度として扱わない。この検証は短い挨拶の生成・合成であり、長文やSTTとの同時実行の性能は未測定。
+
 2026-09-26 に Dev Container 内で AivisSpeech Engine 1.2.0 と `qwen3.5-9b` を起動して測定した。短文「こんにちは。音声チャットのテストです。」を使い、モデル読込後の 1 回の計測値。利用者のマイク入力や長文での性能を示す値ではない。
 
 | 操作 | 所要時間 | 結果 |
@@ -82,9 +114,11 @@ VOICEVOX の合成モデルは公式 Engine 配布物に含まれる。`voicevox
 
 ## API
 
-- `GET /api/voice/voices`: 起動中のエンジンから、まお・コハクと指定の VOICEVOX 5話者のスタイル一覧を取得。`key` は `エンジン:話者名`。
+- `GET /api/voice/runtime`: `{enabled, starting, stopping}` を返す。`GET /api/status` の `voice` にも同じ状態を含む。
+- `PUT /api/voice/runtime`: `{enabled: true}` で起動、`{enabled: false}` で停止。連続切り替えは直列処理し、ONの重複で二重起動しない。
+- `GET /api/voice/voices`: ON中は、まお・コハクと指定の VOICEVOX 5話者のスタイル一覧を取得。OFF中は `[]`。`key` は `エンジン:話者名`。
 - `POST /api/voice/transcribe`: `multipart/form-data` の `file`。最大 12 MiB、録音時間 0.2～30 秒。`{text, duration, speech_detected}` を返す。
-- `POST /api/voice/synthesize`: `{text, style_id, engine}` を受け、指定エンジンの WAV を返す。テキストは最大 200 文字。旧リクエストは `engine=aivis` として扱う。
+- `POST /api/voice/synthesize`: `{text, style_id, engine}` を受け、指定エンジンの WAV を返す。テキストは最大 200 文字。旧リクエストは `engine=aivis` として扱う。OFF中は409。
 - `POST /api/chat`: 読み上げの自動選択時だけ `voice_speaker` に `エンジン:話者名` を指定する。サーバーはその話者の声色候補をシステム指示に追加し、モデルの `[[VOICE_STYLE:...]]` を SSE の `{voice_style:{id,name}}` イベントへ分離する。回答本文、画面表示、TTS にタグは渡さない。タグがない・候補外の場合は選択欄の声色を使う。
 
 ## 現段階の制約

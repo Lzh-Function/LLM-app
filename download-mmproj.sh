@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 画像用エンコーダーを取得。Bonsai 派生版は親モデルのファイルを共有する。
+# 現在使用するモデルの画像用エンコーダーを取得。
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -17,7 +17,5 @@ download() {
 }
 
 download unsloth/Qwen3.5-9B-GGUF qwen3.5-9b mmproj-F16.gguf
-download unsloth/Qwen3.6-35B-A3B-GGUF qwen3.6-35b-a3b mmproj-F16.gguf
-download unsloth/Qwen3.8-27B-GGUF qwen3.8-27b mmproj-F16.gguf
 download unsloth/gemma-4-26B-A4B-it-GGUF gemma4-26b-a4b mmproj-F16.gguf
-download prism-ml/Ternary-Bonsai-2-27B-gguf ternary-bonsai-2-27b Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf
+download prism-ml/Ternary-Bonsai-2-27B-gguf ternary-bonsai-2-27b-abliterated Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf

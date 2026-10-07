@@ -8,7 +8,7 @@ WSL2 + Dev Container 上で、llama.cpp と Strata を使ってローカル LLM 
 | 項目 | 値 |
 |---|---|
 | GPU | GeForce RTX 5070 (VRAM 12GB、うち Windows 表示で約 1.4〜1.6GB 使用) |
-| RAM | 48GB (WSL 内から 47GiB) |
+| RAM | Windows物理64GB、WSL上限48GB（WSL内から約47GiB） |
 | CPU | Core Ultra 7 270K Plus (24 スレッド) |
 | OS | Ubuntu 24.04 (Dev Container on WSL2) |
 | ドライバ | 591.86 / CUDA 13.1 |
@@ -25,15 +25,11 @@ WSL2 + Dev Container 上で、llama.cpp と Strata を使ってローカル LLM 
 │   └── VERSION
 ├── llama-prism/          Bonsai 2 専用の Prism ML fork (CUDA 12.8, b10735)
 ├── strata/              Qwen3.8 Flash Next 用 Strata (CUDA 13.0)
-├── Strata-data/         Flash Next IQ2_XS、MTP、画像エンコーダー
+├── Strata-data/         Flash Next SC117 IQ3_XXS、共用MTP、画像エンコーダー
 ├── qwen3.8-flash-next/   統合 UI から Strata を起動するラッパー
-├── ternary-bonsai-2-27b/             PQ2_0 (7.21GB)
-├── ternary-bonsai-2-27b-abliterated/ Hikari07jp v0.1 PQ2_0 (7.21GB)
-├── qwen3.8-27b/          Dense 27B UD-Q4_K_M (16.5GB)
-├── qwen3.6-35b-a3b/      MoE 35B/A3B  UD-Q4_K_XL (21GB)
-├── gemma4-26b-a4b/       MoE 26B/A4B  UD-Q4_K_XL (16GB)
-├── qwen3.5-9b/           Dense 9B     UD-Q5_K_XL (6.3GB)
-├── dolphin3.0-llama3.1-8b/ Dense 8B   Q6_K (6.6GB)
+├── ternary-bonsai-2-27b-abliterated/ Hikari07jp v0.1 PQ2_0 (7.21GB) + mmproj
+├── gemma4-26b-a4b/       MoE 26B/A4B  UD-Q4_K_XL (17.01GB)
+├── qwen3.5-9b/           Dense 9B     UD-Q5_K_XL (6.74GB)
 │   ├── models/*.gguf     モデル本体
 │   ├── serve.sh          llama-server 起動スクリプト (単体でも使える)
 │   ├── model.toml        チャット UI 用メタデータ
@@ -50,24 +46,30 @@ WSL2 + Dev Container 上で、llama.cpp と Strata を使ってローカル LLM 
 cd /workspace/LLM/llm-chat && uv run llm-chat
 
 # Codex からローカル LLM を使う
-CTX_SIZE=65536 PORT=8080 /workspace/LLM/qwen3.6-35b-a3b/serve.sh   # ターミナル 1
-codex -p qwen-local                                                # ターミナル 2
+bash /workspace/LLM/qwen3.8-flash-next/serve-codex.sh  # ターミナル 1
+codex -p qwen                                     # ターミナル 2（通常のcodexはGPT）
 ```
 
 > VRAM 12GB では **同時に 1 モデルしか載らない**。チャット UI と Codex 用サーバーは同時に使わないこと。
 
-Bonsai 2 の 2 モデルは Prism ML fork を使い、既定コンテキストは VRAM を考慮して 16K。
+Bonsai 2 Abliteratedは Prism ML fork を使い、既定コンテキストは VRAM を考慮して 16K。
 Hikari07jp 版は v0.1 プレビュー。Bonsai 2 と Flash Next の思考切替は `reasoning_effort` に合わせている。
+
+2026-10-07にQwen3.6-35B-A3B、Qwen3.8-27B、Bonsai通常版、Dolphinを削除し、現在のLLMは上記4モデル。Bonsaiの画像エンコーダーは改変版の`models/`に移した。音声はIrodori会話用Small-MF・作品用Large BF16・共有codecとQwen-TTSを保持し、比較用Small RFとLarge変換元FP32だけを整理した。[削除結果と容量](10-storage-audit.md#削除実施結果)
 
 ## ドキュメント一覧
 
 1. [01-setup-models.md](01-setup-models.md) — llama.cpp 導入、Hugging Face からのモデル取得、`serve.sh`、性能実測
 2. [02-chat-ui.md](02-chat-ui.md) — 統合チャット UI の構成、API、主要な関数/メソッド、会話履歴
 3. [03-web-search.md](03-web-search.md) — ウェブ検索 (検索拡張生成) の仕組み、プロバイダ抽象化、思考ループ対策
-4. [04-codex.md](04-codex.md) — Codex CLI との連携、コンテキスト長と速度
+4. [04-codex.md](04-codex.md) — Strata / Flash Nextを使うCodex CLI、sandboxネット接続、コンテキスト
 5. [05-operations.md](05-operations.md) — 運用・ログ・メモリ・トラブルシューティング
 6. [06-voice-chat.md](06-voice-chat.md) — Dev Container 内の AivisSpeech、録音、文字起こし、読み上げ
-7. [07-strata.md](07-strata.md) — Qwen3.8 Flash Next IQ2_XS、Strata の導入と実測、起動手順
+7. [07-strata.md](07-strata.md) — Qwen3.8 Flash Next SC117 IQ3_XXS、Strataの導入と実測、起動手順
+8. [08-irodori-tts.md](08-irodori-tts.md) — Irodori-TTSの比較、声ライブラリとllm-chatへの実装、独立voice-synthesize、GPU/CPU運用・実測・評価ツール
+
+9. [09-qwen-tts.md](09-qwen-tts.md) — Qwen3-TTS 1.7Bの導入、声作成・長文クローン、GPU排他と独立作品保存
+10. [10-storage-audit.md](10-storage-audit.md) — 保存容量の実測、各モデルの役割、断捨離候補と回収容量
 
 ## 今後の拡張候補
 

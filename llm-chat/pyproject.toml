@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 llm-chat = "llm_chat:main"
+voice-synthesize = "llm_chat.voice_synthesize:main"
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]

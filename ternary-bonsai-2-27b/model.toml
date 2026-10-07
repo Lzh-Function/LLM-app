@@ -1,7 +1,0 @@
-# 統合チャット (../llm-chat) が読み込むメタデータ
-id = "ternary-bonsai-2-27b"
-name = "Ternary Bonsai 2 27B"
-description = "Dense 27B・PQ2_0・Prism ML 版 llama.cpp・全層 GPU を優先"
-order = 4
-thinking_mode = "reasoning_effort"
-mmproj = "models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf"

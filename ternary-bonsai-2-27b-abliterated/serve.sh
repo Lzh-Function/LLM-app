@@ -2,7 +2,7 @@
 # Hikari07jp の Bonsai 2 PQ2_0 派生モデルを Prism ML fork で起動する。
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
-MMPROJ="${MMPROJ:-../ternary-bonsai-2-27b/models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf}"
+MMPROJ="${MMPROJ:-models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf}"
 if [[ ! -f "$MMPROJ" ]]; then
     echo "画像用モデルがありません: $MMPROJ。LLM/download-mmproj.sh を実行してください。" >&2
     exit 1

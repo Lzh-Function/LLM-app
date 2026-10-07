@@ -1,0 +1,23 @@
+[project]
+name = "local-qwen-tts-service"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "qwen-tts",
+  "torch==2.10.0",
+  "torchaudio==2.10.0",
+  "fastapi>=0.141.1",
+  "uvicorn[standard]>=0.53.0",
+  "python-multipart>=0.0.20",
+  "huggingface-hub>=0.34,<1",
+]
+
+[tool.uv.sources]
+qwen-tts = { path = "runtime" }
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

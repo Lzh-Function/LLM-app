@@ -1,6 +1,0 @@
-# 統合チャット (../llm-chat) が読み込むメタデータ
-id = "qwen3.6-35b-a3b"
-name = "Qwen3.6-35B-A3B"
-description = "MoE 35B / active 3B・UD-Q4_K_XL・GPU+CPU オフロード"
-order = 1
-mmproj = "models/mmproj-F16.gguf"

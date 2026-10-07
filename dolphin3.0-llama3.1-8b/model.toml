@@ -1,5 +1,0 @@
-# 統合チャット (../llm-chat) が読み込むメタデータ
-id = "dolphin3.0-llama3.1-8b"
-name = "Dolphin 3.0 Llama 3.1 8B"
-description = "Dense 8B・Q6_K・全層 GPU"
-order = 7

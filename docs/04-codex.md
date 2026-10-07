@@ -1,154 +1,156 @@
-# 04. Codex CLI との連携
+# 04. Codex CLIとQwen3.8 Flash Next / Strata
 
-llama-server は OpenAI **Responses API** (`/v1/responses`) を提供しているため、
-Codex CLI の独自プロバイダとして接続できる。ログイン・API キー・トークン課金は不要。
+Codexの既定モデルは従来のGPT（この環境では`gpt-6.1-sol`）。
+`codex -p qwen`を指定したときだけ、導入済みのSC117版Qwen3.8-Flash-Next GSQ-RCO abliterated IQ3_XXSを利用する。
+Strataの`/v1/responses`を使い、ファイル編集・シェル実行・ツール結果を返して続けるエージェント操作に対応する。
+Codex CLI 0.159.2、Strataエンジン0.1.40で確認した。モデル重みの導入手順は[07-strata.md](07-strata.md)。
 
-- Codex CLI: 0.156.1 (2026-02 に `wire_api = "chat"` は廃止 → `"responses"` を使う)
-- 推奨モデル: **Qwen3.6-35B-A3B** (エージェント型コーディング向け。9B は長い手順で破綻しやすい)
+## 1. 設定と起動
 
-## 1. プロファイル設定
+この環境の`/home/vscode/.codex/qwen.config.toml`は設定済み。
+通常のGPTは`codex`で起動する。Qwenの導入・再設定と利用は次のとおり。
 
-Codex 0.156 の `-p <name>` は **`~/.codex/<name>.config.toml` をベース設定の上に重ねる**仕様。
-ベースの `config.toml` には手を入れず、ローカル用プロファイルを別ファイルにしている。
+```bash
+cd /workspace/LLM
+uv run codex/setup.py
+# ターミナル1: Codex用のローカルサーバー
+bash qwen3.8-flash-next/serve-codex.sh
+# ターミナル2: 作業ディレクトリでQwenを指定
+cd /path/to/project
+codex -p qwen
+# 非インタラクティブ
+codex exec -p qwen "指示"
+```
 
-`~/.codex/qwen-local.config.toml`:
+旧Qwen3.6 / llama.cpp用の`qwen-local.config.toml`は削除した。新しいプロファイル名は`qwen`。
+セットアップはQwenのモデル・プロバイダー・専用カタログ・コンテキストを別ファイルに保存する。
+以前のグローバルQwen設定が残っていれば、導入前のバックアップからGPT設定を復元し、プロジェクトの信頼設定や追加したMCP等を保持する。
+再実行しても既定のGPT設定を変更しない。
+以前の設定は`~/.codex/config-backups/flash-next-<日時>/`へ退避する。モデル重みやチャットUIのモデル一覧は削除しない。
+
+設定の元は`codex/qwen.config.toml`、専用モデル情報は`codex/models.json`、基本指示は`codex/instructions.md`。
+セットアップは`CODEX_HOME`があればその場所へ、なければ`~/.codex`へ書き込む。
+`flash-next-models.json`にはFlash Next一モデルだけを登録する。CodexがOpenAIモデル用の大きなフォールバック定義を使うことを避け、実際のコンテキスト・推論レベル・ツール形式を指定する。
+
+Qwenプロファイルの内容は次の設定。Qwenはログイン・APIキーを要求しない。GPTは従来の認証を使う。
 
 ```toml
-# codex -p qwen-local : ローカル llama.cpp の Qwen3.6-35B-A3B を使う
-# 事前に: CTX_SIZE=65536 PORT=8080 /workspace/LLM/qwen3.6-35b-a3b/serve.sh
-model = "qwen3.6-35b-a3b"
-model_provider = "llamacpp"
-model_context_window = 65536
-
-# サンドボックス内のコマンドにネットワークを許可 (hf download / curl で HF API 等を使うため)
+model = "qwen3.8-flash-next-sc117-abliterated-iq3_xxs"
+model_provider = "strata"
+model_catalog_json = "/home/vscode/.codex/flash-next-models.json"
+model_context_window = 131072
+model_auto_compact_token_limit = 98304
+model_reasoning_effort = "high"
+show_raw_agent_reasoning = true
 sandbox_mode = "workspace-write"
+web_search = "disabled"
 
 [sandbox_workspace_write]
 network_access = true
 
-[model_providers.llamacpp]
-name = "llama.cpp (local)"
+[model_providers.strata]
+name = "Strata (local Flash Next)"
 base_url = "http://127.0.0.1:8080/v1"
 wire_api = "responses"
-stream_idle_timeout_ms = 10000000
+requires_openai_auth = false
+supports_websockets = false
+stream_idle_timeout_ms = 600000
 ```
 
-- `env_key` を書かないので API キーは要求されない。
-- `workspace-write` は既定でネットワーク遮断だが、`network_access = true` で**既定で許可**している。
-  書き込み可能なのは作業ディレクトリ (`-C` で指定) と `/tmp` のみ。
-- `~/.codex` は Docker named volume (`devcontainer-codex`) なのでコンテナ再作成後も残る。
+カスタムプロバイダー・`responses`・ネットワーク設定は[OpenAI公式設定リファレンス](https://learn.chatgpt.com/docs/config-file/config-reference)に対応する。
+別ファイルのプロファイルを`-p`で重ねる方式は[OpenAI公式プロファイル設定](https://learn.chatgpt.com/docs/config-file/config-advanced#profiles)に従う。
+Strata側のAPI、namespace/customツール、会話履歴の扱いは[Strata公式資料](https://github.com/Niko1221/Strata/blob/main/docs/DETAILS.md#the-responses-api-and-codex-cli)を参照。
 
-## 2. 起動手順
+## 2. sandboxとインターネット
+
+`workspace-write`で作業ディレクトリと一時領域への書き込みを許可し、`network_access = true`を既定とした。
+ネット接続のための追加フラグは不要。実際のCodexのシェルからHugging FaceへHTTPSで接続し、取得したJSONの内容を確認済み。
+承認ポリシーはCodexの通常の`on-request`を使う。ネット接続を有効にするためにsandbox全体を無効化する必要はない。
+
+Qwenプロファイルでは、StrataがOpenAIのホストする`web_search`等のツールを実行しないため、その機能は無効。
+`curl`やPythonからのネット取得は利用できる。QwenではAppsとmulti-agentも無効にした。
+GPTにはQwen専用のカタログ・コンテキスト・機能制限を適用しない。
+MCPやプラグイン、プロジェクトのAGENTS.md・スキルの設定は個別に追加できる。
+
+## 3. GPUとサーバー
+
+`serve-codex.sh`は既定で`127.0.0.1:8080`に起動し、次を行う。
+
+1. ポートが未使用か確認。
+2. 起動中のllm-chatへLLMアンロードを要求。llm-chatが停止中ならそのまま進む。
+3. `irodori-tts/gpu.lock`を予約し、Strataサーバーへ継承。
+4. 既存の重み・packを使い、Codex専用の設定で起動。
+
+GPU音声がONの間は起動を拒否する。Codexサーバー稼働中はllm-chatのLLMやGPU音声の起動もブロックする。
+チャット用の`serve.sh`は5071、Codex用は8080。同じGPUに二つのLLMを同時にロードしない。
+停止は起動ターミナルでCtrl+C。Strataがエンジンを終了してからGPU予約を解放する。
+既定ポートを変える場合は`serve-codex.sh --port <番号>`とCodexの`base_url`の両方を揃える。
+
+ログは`qwen3.8-flash-next/server-codex.log`（サーバー）と`strata/strata-codex-sc117-iq3_xxs.log`（エンジン）。
+確認コマンド:
 
 ```bash
-# ターミナル 1: Codex 用サーバー (チャット UI とは別ポート 8080、ctx 64k)
-#   ※ 先にチャット UI のモデルは「停止」しておく (VRAM は 1 モデル分しかない)
-CTX_SIZE=65536 PORT=8080 /workspace/LLM/qwen3.6-35b-a3b/serve.sh
-
-# ターミナル 2: インタラクティブ
-cd /path/to/project
-codex -p qwen-local
-
-# 非インタラクティブ (1 回実行して終了)
-codex exec -p qwen-local --skip-git-repo-check -s workspace-write "指示"
+curl -s http://127.0.0.1:8080/health
+curl -s http://127.0.0.1:8080/v1/status
+codex --strict-config doctor --summary  # 既定のGPT設定の診断
+nvidia-smi --query-gpu=memory.used --format=csv,noheader
 ```
 
-| 起動方法 | モード |
-|---|---|
-| `codex -p qwen-local` | インタラクティブ (TUI) |
-| `codex exec -p qwen-local "..."` | 非インタラクティブ |
+## 4. コンテキストとメモリ
 
-接続確認: 起動時のヘッダーに `model: qwen3.6-35b-a3b` / `provider: llamacpp` が表示される。
+Codex用は128K（131072トークン）、自動要約の閾値は98K（98304トークン）。
+llm-chat側もFlash Nextは128Kが既定で、UIから256Kまで変更できる。Codex用とは別に管理する。
+専用モデルカタログ・Codex設定・`strata-codex-config.json`の三つを揃えた。
+Codex設定の`model_context_window`だけを大きくしても、バックエンドの上限を超えるプロンプトは拒否される。
+自動要約の閾値は出力用の余裕を残した値にする。
 
-`-p` を使わない場合の代替: `codex -c model_provider=llamacpp -c model=qwen3.6-35b-a3b`
-(この場合 provider 定義はベースの `config.toml` に必要)。
+StrataはGPUの空き領域を専門家キャッシュへ回す。そのためVRAM使用量がカードの上限に近いだけでは、コンテキストを広げられないとは判断できない。
+通常はKVキャッシュを増やすと専門家キャッシュが減り、生成速度やRAM使用量に影響する。
+エンジン0.1.40の`--kv-grow`は、この環境のRAM節約設定`--resident-experts`と併用できないことを実機で確認した。
+Codex用はKVを起動時に確保する。WSLのKV streamingも使わない。
 
-### Codex 用サーバーの停止
+RTX 5070 / RAM約48GBで、128K設定に84031トークンを実際に入力し、末尾の指定文字列を正しく返した。
+長文テストは約68.9秒。2秒間隔で取得したメトリクスの最大値は次のとおり。
 
-使い終わったら止めて VRAM を解放する (チャット UI を使う前にも必要)。
+| 項目 | 実測 |
+| --- | --- |
+| GPU使用量 | 11968MiB / 12227MiB |
+| RAM使用量 | 約40.5GiB / 47.0GiB |
+| RAMの残量 | 約6.5GiB |
+| GPUの専門家キャッシュ | 32Kで約4.1GiB → 128Kで約2.7GiB |
 
-```bash
-# フォアグラウンドで起動した場合: そのターミナルで Ctrl+C
-#   (serve.sh は exec で llama-server に置き換わるので Ctrl+C で本体まで止まる)
+RAM残量は計測時の全体使用量との差。テスト直後のOSの利用可能メモリも約6.5GiBだった。
+GPUの専門家キャッシュが減るため、速度との交換になる。RAMに全専門家を常駐できず、一部はOSのファイルキャッシュに依存する。
+128K上限すべてを埋めるテストは未実施。現時点では128Kを採用し、それ以上への拡大は実測して判断する。
+長い会話を保持しても、モデルが常に全履歴を正しく利用する保証にはならない。不要なツール出力は短くし、要約と併用する。
 
-# バックグラウンド (nohup 等) で起動した場合: ポート 8080 のプロセスだけを止める
-fuser -k 8080/tcp
+## 5. 動作確認
 
-# fuser が無い場合の代替: コマンドラインに --port 8080 を含む llama-server だけを kill
-for p in $(pgrep -x llama-server); do
-  tr '\0' ' ' < /proc/$p/cmdline | grep -q -- "--port 8080" && kill $p
-done
+128K設定での速度実測（トークンは文字数とは異なる）:
 
-# 停止確認
-curl -s localhost:8080/health || echo "stopped"
-nvidia-smi --query-gpu=memory.used --format=csv,noheader   # 約 1.4GB に戻れば解放済み
-```
+| テスト | 入力処理 | 生成 |
+| --- | --- | --- |
+| 起動後のCodex小規模作業、約4～5K入力 | 初回941.7トークン/秒、4.3秒 | 56.5～62.1トークン/秒、各147～187トークン生成 |
+| 約84Kの反復英文入力＋英文説明384トークン | 1460.3トークン/秒、57.6秒 | 49.8トークン/秒、7.7秒 |
+| 長文処理後のQwenプロファイルでの同じ小規模作業 | 初回128.0トークン/秒、31.7秒 | 37.1～53.5トークン/秒、各155～193トークン生成 |
 
-> - `pkill llama-server` は**使わない**。チャット UI の内部サーバー (5071) まで止まる。
-> - `pkill -f 8080` のような `-f` 指定も**使わない**。実行中のシェル自身にも一致して終了する
->   ([05 の 1 章](05-operations.md#1-プロセス管理))。
+後者のAPIリクエスト全体は約65.6秒。入力のキャッシュ再利用は0。
+長文側は合成した反復入力での計測であり、実際のリポジトリ全体を使った速度評価ではない。
+32Kと128Kを同じ入力・出力条件で比較していないため、128Kによる低下率は未測定。
+速度は言語・出力内容・MTPの採択率・キャッシュ再利用等で変わる。
+長文処理後は小さい入力でも初回処理の待ち時間が大きかった。常に50～60トークン/秒で動くとの評価ではない。
 
-## 3. 動作確認に使ったコマンド
+実モデルにCodexから次を指示し、生成物とコマンド実行結果を確認した。
 
-```bash
-# Responses API を直接叩く
-curl -s localhost:8080/v1/responses -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3.6-35b-a3b","input":"1+1は？数字だけ答えて"}' | jq '.output'
+- `fizzbuzz.py`を作成し、Pythonで1～15を実行。
+- HTTPSでHugging FaceのJSONを取得。
+- PythonでJSONの`id`を照合。
+- ツール結果をモデルに返し、最終報告を受け取る。
 
-# Codex 非インタラクティブテスト
-mkdir -p /tmp/codex-test
-codex exec -p qwen-local --skip-git-repo-check --ephemeral -s workspace-write -C /tmp/codex-test \
-  "fizzbuzz.py を作成して 1〜15 の FizzBuzz を出力するようにし、python3 で実行して結果を確認して。" < /dev/null
+128K設定で初回プロンプトは約4Kトークン。3リクエスト合計の入力13431、キャッシュ再利用8955、出力493トークン。
+Codexの診断はエラー0。StrataのResponses APIテスト21件も通過した。
+検証ファイルはこの環境の`/tmp/codex-flash-next-128k-smoke/`、長文テストは`/tmp/strata-codex-context-128k/`に保存した。
+GPTへの復帰後も`codex -p qwen`から同じ操作が通った。プロファイルの検証ファイルは`/tmp/codex-qwen-profile-smoke/`。
+設定の移行・GPT設定の保持・再実行について`python3 -m unittest discover -s codex -p test_setup.py -v`の3テストが通過した。
 
-# サーバー側のリクエストごとの速度
-grep -E "prompt eval time|       eval time" /workspace/LLM/qwen3.6-35b-a3b/server-codex.log
-```
-
-## 4. コンテキスト長と速度 (重要)
-
-Codex はシステムプロンプト + ツール定義だけで約 7,000 トークン使うため、チャット用の 32k より広げる必要がある。
-ただし広げるほど KV キャッシュが VRAM を占め、`--fit` が MoE 層を CPU に追い出すので遅くなる。
-
-| ctx | 生成速度 | 初回プロンプト (6,889 tok) | FizzBuzz タスク全体 |
-|---|---|---|---|
-| 32k (チャット) | 約 51 tok/s | – | – (Codex には狭い) |
-| **64k (採用)** | **約 25 tok/s** | 32 秒 (217 tok/s) | **56 秒** |
-| 128k | 3.25 tok/s | 58 秒 (119 tok/s) | 4 分以上 |
-
-- 2 回目以降のリクエストはプロンプトキャッシュ (前回との共通部分の再利用) で 1〜3 秒。
-- 64k を超える長い作業では Codex の自動 compaction (履歴要約) に頼る。
-
-## 5. モデルのダウンロード (ネットワーク利用)
-
-Codex 組み込みの `web_search` は使えないが、シェル経由の `curl` / `uvx ... hf download` は使える。
-ファイル一覧は Hugging Face API で取得できるため、ウェブ検索は不要。
-
-```bash
-cd /workspace/LLM && codex -p qwen-local
-# 例: 「HF API で unsloth/Qwen3.8-27B-GGUF のファイル一覧を調べ、UD-Q4_K_XL を
-#      qwen3.8-27b/models に nohup でバックグラウンドダウンロードして」
-```
-
-- 実測: 「HF API で unsloth/Qwen3.5-9B-GGUF のファイル一覧を表示し README.md をダウンロード」を
-  `curl` 2 回で正常に完了 (sandbox 表示: `workspace-write ... (network access enabled)`)。
-- 数十 GB のダウンロードはコマンドのタイムアウトを避けるため `nohup ... &` を指示する。
-- モデルは学習時点以降の新しいリポジトリ名を知らないので、API での検索 (`/api/models?search=...&author=unsloth`) を指示すると確実。
-
-## 6. 既知の警告・制限
-
-| 表示 | 意味 |
-|---|---|
-| `Model metadata for 'qwen3.6-35b-a3b' not found` | Codex がモデル情報を持っていない。フォールバック値で動作し、今回の範囲では問題なし |
-| `Codex could not find bubblewrap on PATH` | サンドボックス用。同梱版で代替される |
-| サーバーログ `unsupported Responses tool type 'web_search' skipped` | Codex 組み込みの web_search は llama.cpp 非対応のため使えない |
-
-## 7. Claude Code について (検討のみ)
-
-llama-server は Anthropic 形式 (`/v1/messages`) も提供しており、
-`ANTHROPIC_BASE_URL=http://127.0.0.1:8080 ANTHROPIC_AUTH_TOKEN=dummy ANTHROPIC_MODEL=qwen3.6-35b-a3b claude`
-で技術的には接続可能。ただし公式サポート外・システムプロンプトが大きく 64k を圧迫・
-自動要約が 200k 前提、といった理由から **Codex を採用**した (未検証)。
-
-## 8. 今後の改善候補
-
-- `-ub 2048` (ubatch 拡大) で CPU オフロード時の初回プロンプト処理を高速化できる可能性 (未計測)
+この確認は小規模な実行テスト。大きなリポジトリで長時間継続するエージェント作業の品質評価ではない。

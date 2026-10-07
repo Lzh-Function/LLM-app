@@ -55,7 +55,7 @@
   /* 状態バッジの共通スタイル。ready/loading/error のクラスを JS で付け替えて色を変える。 */
   .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
   .badge.ready { color: var(--accent); border-color: var(--accent); }
-  .badge.loading { color: #b7791f; border-color: #b7791f; }
+  .badge.loading, .badge.cleaning { color: #b7791f; border-color: #b7791f; }
   .badge.error { color: var(--err); border-color: var(--err); }
   /* flex: 1 で残りの横幅を埋め、ヘッダー右側の操作を端へ寄せる。 */
   .spacer { flex: 1; }
@@ -111,6 +111,12 @@
   #imageDialog { max-width: 95vw; max-height: 95vh; background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
   #imageDialog img { display: block; max-width: 85vw; max-height: 80vh; object-fit: contain; }
   #voiceStatus { color: var(--muted); font-size: 12px; min-height: 18px; }
+  #voiceLibrary { width: min(900px, 95vw); max-height: 90vh; overflow-y: auto; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; }
+  #voiceLibrary textarea, #voiceLibrary input[type=text] { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+  #voiceLibrary .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+  #voiceLibrary .voice-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 10px 0; }
+  #voiceLibrary audio { width: min(100%, 420px); }
+  #voiceLibrary small { color: var(--muted); }
   /* 会話がまだないときの案内文。 */
   #empty { color: var(--muted); text-align: center; margin-top: 20vh; }
 </style>
@@ -122,6 +128,11 @@
   <h1>LLM Chat</h1>
   <!-- モデルの候補は起動時に /api/status から取得し、JS で option を追加する。 -->
   <select id="model"></select>
+  <label class="opt" title="入力・履歴・出力を合わせた上限。変更後に切り替えを押すと再起動して適用します。大きい値ではメモリ不足で起動できない場合があります。">コンテキスト
+    <input id="contextLength" type="number" min="512" step="1" list="contextPresets" aria-label="コンテキスト長（トークン）" style="width:110px">
+  </label>
+  <datalist id="contextPresets"></datalist>
+  <span id="contextInfo" class="badge"></span>
   <!-- 選んだモデルをバックエンドで起動する。class="primary" は強調表示用。 -->
   <button id="loadBtn" class="primary">切り替え</button>
   <!-- stopped / loading / ready / error を表示する。 -->
@@ -139,12 +150,15 @@
   <!-- 対応モデルへ enable_thinking を渡す共通スイッチ。非対応モデルでは思考欄は出ない。 -->
   <label class="opt"><input type="checkbox" id="think" checked> 思考モード</label>
   <label class="opt"><input type="checkbox" id="speak"> 🔊 読み上げ</label>
-  <select id="voiceSpeaker" aria-label="読み上げ話者" disabled><option>音声を確認中…</option></select>
-  <button id="voiceRefreshBtn" type="button">音声再確認</button>
+  <select id="voiceEngine" aria-label="音声エンジン"><option value="legacy">AivisSpeech / VOICEVOX</option><option value="irodori">Irodori</option></select>
+  <select id="voiceMode" aria-label="Irodoriのモード" hidden><option value="chat">会話（MF4）</option><option value="design">声作成（Large GPU）</option></select>
+  <button id="voiceLibraryBtn" type="button">声ライブラリ</button>
+  <select id="voiceSpeaker" aria-label="読み上げ話者" disabled><option>読み上げはOFFです</option></select>
+  <button id="voiceRefreshBtn" type="button" disabled>音声再確認</button>
   <label class="opt" title="話者は選択欄で指定し、その話者の声色を回答ごとに LLM が選びます"><input type="checkbox" id="autoStyle" checked> 声色を自動選択</label>
   <select id="voiceStyle" aria-label="手動の声色" disabled hidden></select>
-  <button id="stopAudioBtn" type="button">音声停止</button>
-  <button id="readAgainBtn" type="button">再読上げ</button>
+  <button id="stopAudioBtn" type="button" disabled>音声停止</button>
+  <button id="readAgainBtn" type="button" disabled>再読上げ</button>
   <!-- 回答のランダムさを調整する温度。空欄ならモデル側の既定値を使う。 -->
   <label class="opt">温度 <input type="number" id="temp" step="0.1" min="0" max="2" placeholder="既定" style="width:70px"></label>
   <!-- ログの表示、モデルの停止、会話の作り直し。 -->
@@ -181,6 +195,38 @@
 </footer>
 
 <dialog id="imageDialog"><button id="closeImage" type="button">閉じる</button><img id="fullImage" alt="添付画像"></dialog>
+<dialog id="voiceLibrary" aria-labelledby="libraryTitle">
+  <div class="actions"><h2 id="libraryTitle">声ライブラリ</h2><button id="closeLibrary" type="button">閉じる</button></div>
+  <p>声の説明から候補を作り、試聴して登録すると会話で使えます。選んだ音声を参照として保存します。</p>
+  <p>声作成はLargeをGPUで使い、ロード済みの言語モデルを自動で停止します。会話モードはCPUで動作します。高品質の長文合成は<a href="http://localhost:5080" target="_blank" rel="noopener">Voice Synthesize</a>で行えます。</p>
+  <div class="actions"><button id="startDesign" type="button">声作成モードを起動</button><button id="startChatVoice" type="button">会話モードで試す</button><button id="libraryOff" type="button">音声OFF</button></div>
+  <div id="libraryRuntime" role="status"></div>
+  <form id="candidateForm">
+    <label>声の説明（高さ・響き・息の量・年齢感・話し方）<textarea id="candidateCaption" rows="2" maxlength="1000" required placeholder="落ち着いた低めの女性の声。息は控えめで、丁寧で穏やかな話し方。"></textarea></label>
+    <label>試聴文<textarea id="candidateText" rows="4" maxlength="600" required></textarea></label>
+    <div class="actions">
+      <label>候補名 <input id="candidateName" type="text" value="声の候補" maxlength="80" required></label>
+      <label>seed <input id="candidateSeed" type="number" min="0" max="4294967295" placeholder="ランダム"></label>
+      <label>候補数 <input id="candidateCount" type="number" min="1" max="8" value="1" required></label>
+      <button id="generateCandidates" class="primary" type="submit" disabled>候補を生成</button>
+    </div>
+    <small>候補は1つずつ生成します。複数指定時はseedを順に変えます。参照は30秒程度以上が推奨ですが、短い候補も試せます。</small>
+  </form>
+  <details><summary>手持ちのWAVを声として登録</summary>
+    <form id="importVoiceForm">
+      <label>表示名 <input id="importVoiceName" type="text" maxlength="80" required></label>
+      <label>参照WAV <input id="importVoiceFile" type="file" accept="audio/wav,.wav" required></label>
+      <label>出典・利用条件 <input id="importVoiceSource" type="text" maxlength="1000"></label>
+      <button type="submit">登録</button>
+    </form>
+  </details>
+  <hr>
+  <label>別の文章で声を確認<textarea id="previewVoiceText" rows="2" maxlength="200">明日の予定を一緒に確認しましょう。午前十時に駅前で待ち合わせます。</textarea></label>
+  <div class="actions"><label>話し方 <select id="previewVoicePreset"></select></label><label class="opt"><input id="favoritesOnly" type="checkbox">お気に入りのみ</label><button id="reloadLibrary" type="button">一覧を更新</button></div>
+  <div id="libraryStatus" role="status" aria-live="polite"></div>
+  <audio id="libraryPreview" controls hidden></audio>
+  <div id="libraryItems"></div>
+</dialog>
 <!-- script 内は画面を動かす JavaScript。末尾に置くので、上の HTML 要素を取得できる。 -->
 <script>
 // $ は id から HTML 要素を取得する短い関数。例: $("input") は入力欄を返す。
@@ -345,6 +391,7 @@ async function openConv(id) {
   state.lastReply = lastAssistant?.content ?? "";
   state.lastReplyStyle = lastAssistant?.voice_style_id ?? null;
   state.lastReplyEngine = lastAssistant?.voice_engine ?? "aivis";
+  state.lastReplyVoice = lastAssistant?.voice_id ?? null;
   $("sys").value = c.system ?? "";
   // 開いた履歴への続きの発言も保存できるようにする。
   $("save").checked = true; storeSavePref();
@@ -446,12 +493,62 @@ function addEl(cls, html) {
 // モデル ID に対応する表示名を探す。見つからなければ ID をそのまま使う。
 function modelName(id) { return state.status?.models.find(m => m.id === id)?.name ?? id; }
 
+function contextValid() {
+  const input = $("contextLength");
+  return input.value !== "" && Number.isInteger(input.valueAsNumber) && input.checkValidity();
+}
+
+function updateContextControls() {
+  const model = state.status?.models.find(m => m.id === $("model").value);
+  if (!model) return;
+  const input = $("contextLength");
+  state.contextValues ??= {};
+  if (state.contextModel !== model.id) {
+    let saved;
+    try { saved = Number(localStorage.getItem("contextLength:" + model.id)); } catch {}
+    const remembered = state.contextValues[model.id] ?? saved;
+    input.value = Number.isInteger(remembered) && remembered >= 512 && remembered <= model.max_context_length
+      ? remembered : model.context_length;
+    state.contextModel = model.id;
+    $("contextPresets").replaceChildren();
+    for (const value of [4096, 8192, 16384, 32768, 65536, 98304, 131072, 196608, 262144]) {
+      if (value > model.max_context_length) continue;
+      const option = document.createElement("option");
+      option.value = String(value); option.label = `${value / 1024}K`;
+      $("contextPresets").append(option);
+    }
+  }
+  input.max = model.max_context_length;
+  const busy = !!state.controller || !!state.modelLoading || ["loading", "cleaning"].includes(state.status.status);
+  input.disabled = busy;
+  $("loadBtn").disabled = busy || !contextValid();
+  $("loadBtn").textContent = state.status.active === model.id && input.valueAsNumber !== model.context_length
+    ? "再起動して適用" : "切り替え";
+  $("contextInfo").textContent = `上限 ${model.max_context_length / 1024}K`;
+  $("contextInfo").title = `512〜${model.max_context_length}トークン。設定はモデルごとにブラウザーへ保存します。`;
+}
+
 // サーバーの状態を取得し、モデル一覧・バッジ・ボタンの状態を画面に反映する。
 async function refresh() {
+  const voiceRevision = state.voiceRevision ?? 0;
   // /api/status が現在のモデル一覧、起動中モデル、loading/ready/error などを返す。
   const st = await (await fetch("/api/status")).json();
   const first = !state.status;
+  const previousVoice = state.status?.voice;
+  const profileChanged = previousVoice && st.voice && (previousVoice.engine !== st.voice.engine || previousVoice.mode !== st.voice.mode);
   state.status = st;
+  if (!state.voiceChanging && st.voice) {
+    $("voiceEngine").value = st.voice.engine ?? "legacy";
+    $("voiceMode").value = st.voice.mode ?? "chat";
+    $("voiceMode").hidden = $("voiceEngine").value !== "irodori";
+    updateLibraryRuntime(st.voice);
+  }
+  if (!state.voiceChanging && voiceRevision === (state.voiceRevision ?? 0) && st.voice && (state.voiceEnabled !== st.voice.enabled || profileChanged)) {
+    state.voiceEnabled = st.voice.enabled;
+    $("speak").checked = st.voice.enabled;
+    resetVoiceControls(st.voice.enabled ? "音声エンジンを起動中…" : "読み上げはOFFです");
+    if (st.voice.enabled) refreshVoices();
+  }
   // 初回表示、またはモデル数が変わった場合に選択肢を作り直す。
   if (first || $("model").options.length !== st.models.length) {
     $("model").innerHTML = st.models.map(m => `<option value="${m.id}">${m.name}</option>`).join("");
@@ -460,59 +557,136 @@ async function refresh() {
   // 状態に応じたクラスを付けると、CSS の .badge.ready などで色が切り替わる。
   const b = $("badge");
   b.className = "badge " + st.status;
-  b.textContent = st.active ? `${modelName(st.active)}: ${st.status}` : st.status;
+  const statusLabel = st.status === "cleaning" ? "メモリを解放中" : st.status;
+  b.textContent = st.active ? `${modelName(st.active)}: ${statusLabel}${st.active_context_length ? ` / ${st.active_context_length / 1024}K` : ""}` : statusLabel;
   // プルダウンで選択中のモデルの説明を表示する。
   $("desc").textContent = st.models.find(m => m.id === $("model").value)?.description ?? "";
   // 回答の受信中、またはモデルが未起動なら送信できない。ロード中も切り替えを止める。
   const busy = !!state.controller;
   updateImageControls();
   $("loadBtn").disabled = busy || st.status === "loading";
+  updateContextControls();
   $("unloadBtn").disabled = busy;
   // 同じ起動エラーを何度も表示しないよう lastError と比較する。
   if (st.status === "error" && st.error && state.lastError !== st.error) {
     state.lastError = st.error;
-    addEl("error", "起動に失敗しました:\n" + st.error.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])));
+    const box = addEl("error", st.error.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])));
+    if (st.error_detail) {
+      const details = document.createElement("details");
+      const summary = document.createElement("summary"); summary.textContent = "詳細ログ";
+      const pre = document.createElement("pre"); pre.textContent = st.error_detail;
+      details.append(summary, pre); box.append(details);
+    }
   }
   // 以前の予約を取り消してから次回の状態確認を予約する。ロード中は 1 秒、それ以外は 5 秒。
   clearTimeout(state.timer);
-  state.timer = setTimeout(refresh, st.status === "loading" ? 1000 : 5000);
+  state.timer = setTimeout(refresh, ["loading", "cleaning"].includes(st.status) ? 1000 : 5000);
 }
 
 // 「切り替え」ボタンから呼ばれ、選択したモデルの起動を API に依頼する。
 async function loadModel() {
+  if (state.controller || ["loading", "cleaning"].includes(state.status?.status) || state.modelLoading || !$("contextLength").reportValidity() || !contextValid()) return;
+  const model = $("model").value;
+  const contextLength = $("contextLength").valueAsNumber;
+  state.modelLoading = true;
+  updateContextControls();
   stopSpeech();
   state.lastError = null;
-  await fetch(`/api/models/${$("model").value}/load`, { method: "POST" });
+  try {
+    const res = await fetch(`/api/models/${model}/load`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ context_length: contextLength }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail ?? `モデルをロードできません (${res.status})`);
+    }
+  } catch (e) {
+    addEl("error", e.message.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])));
+  } finally {
+    state.modelLoading = false;
+  }
   // 起動は非同期なので、まず現在の loading 状態などを読み直す。
   refresh();
 }
 
-// 音声エンジンの話者一覧から、この画面で選べるスタイルを取得する。
-async function refreshVoices() {
-  if (state.voiceChecking) return;
+function resetVoiceControls(message) {
+  stopSpeech();
   clearTimeout(state.voiceRetryTimer);
-  state.voiceChecking = true;
+  state.voiceController?.abort();
+  state.voiceController = null;
+  state.voices = [];
+  const option = document.createElement("option");
+  option.textContent = message;
+  $("voiceSpeaker").replaceChildren(option);
+  $("voiceSpeaker").disabled = true;
+  $("readAgainBtn").disabled = true;
+  $("stopAudioBtn").disabled = !$("speak").checked;
+  $("voiceRefreshBtn").disabled = !$("speak").checked;
+  $("voiceStatus").textContent = message;
+  updateVoiceStyles();
+}
+async function toggleVoice() {
+  const enabled = $("speak").checked;
+  state.voiceRevision = (state.voiceRevision ?? 0) + 1;
+  state.voiceChanging = true;
+  $("speak").disabled = true;
+  $("voiceEngine").disabled = true;
+  $("voiceMode").disabled = true;
+  resetVoiceControls(enabled ? "音声エンジンを起動中…" : "音声エンジンを停止中…");
+  try {
+    const res = await fetch("/api/voice/runtime", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled, engine: $("voiceEngine").value, mode: $("voiceMode").value }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    state.voiceEnabled = (await res.json()).enabled;
+    $("speak").checked = state.voiceEnabled;
+    resetVoiceControls(state.voiceEnabled ? "音声エンジンを起動中…" : "読み上げはOFFです");
+    if (state.voiceEnabled) refreshVoices();
+  } catch (e) {
+    // Recover the actual state after a lost response; never start an engine implicitly.
+    state.voiceEnabled = undefined;
+    $("voiceStatus").textContent = "音声の切り替えに失敗しました: " + e.message;
+  } finally {
+    state.voiceChanging = false;
+    $("speak").disabled = false;
+    $("voiceEngine").disabled = false;
+    $("voiceMode").disabled = false;
+    refresh();
+  }
+}
+// ON中だけ話者一覧を確認する。OFF直前の応答は画面に反映しない。
+async function refreshVoices() {
+  if (!state.voiceEnabled || !$("speak").checked || state.voiceController) return;
+  clearTimeout(state.voiceRetryTimer);
   $("voiceRefreshBtn").disabled = true;
   const controller = new AbortController();
+  state.voiceController = controller;
   const timeout = setTimeout(() => controller.abort(), 8000);
   let available = false;
+  let starting = false;
   try {
     const res = await fetch("/api/voice/voices", { signal: controller.signal });
     if (!res.ok) throw new Error("音声エンジンが起動していません");
+    starting = res.headers.get("X-Voice-Starting") === "1";
     const voices = await res.json();
+    if (state.voiceController !== controller) return;
     state.voices = voices;
-    const selected = $("voiceSpeaker").value;
+    const selected = state.desiredVoice ?? $("voiceSpeaker").value;
     $("voiceSpeaker").replaceChildren();
     for (const voice of voices) {
       const option = document.createElement("option");
       option.value = voice.key;
-      option.textContent = `${voice.name}（${voice.engine === "voicevox" ? "VOICEVOX" : "AivisSpeech"}）`;
+      option.textContent = `${voice.name}（${voice.engine === "irodori" ? "Irodori" : voice.engine === "voicevox" ? "VOICEVOX" : "AivisSpeech"}）`;
       $("voiceSpeaker").appendChild(option);
     }
-    if (selected && voices.some(voice => voice.key === selected)) $("voiceSpeaker").value = selected;
+    if (selected && voices.some(voice => voice.key === selected)) {
+      $("voiceSpeaker").value = selected;
+      state.desiredVoice = null;
+    }
     $("voiceSpeaker").disabled = !voices.length;
     available = voices.length > 0;
-    $("speak").disabled = !available;
     $("readAgainBtn").disabled = !available;
     if (!available) {
       const option = document.createElement("option");
@@ -520,23 +694,28 @@ async function refreshVoices() {
       $("voiceSpeaker").appendChild(option);
     }
     updateVoiceStyles();
-    $("voiceStatus").textContent = available ? "音声を利用できます" : "音声が見つかりません。10秒後に再確認します。";
+    $("voiceStatus").textContent = available
+      ? (starting ? "音声を利用できます。残りの音声を起動中です。" : "音声を利用できます")
+      : (state.status?.voice?.engine === "irodori" && state.status?.voice?.ready
+         ? "声ライブラリから声を登録してください。" : "音声が見つかりません。10秒後に再確認します。");
   } catch (e) {
+    if (state.voiceController !== controller) return;
     stopSpeech();
     state.voices = [];
     const option = document.createElement("option");
     option.textContent = e.name === "AbortError" ? "音声の確認がタイムアウトしました" : "音声エンジンに接続できません";
     $("voiceSpeaker").replaceChildren(option);
     $("voiceSpeaker").disabled = true;
-    $("speak").disabled = true;
     $("readAgainBtn").disabled = true;
     updateVoiceStyles();
     $("voiceStatus").textContent = `${option.textContent}。10秒後に再確認します。`;
   } finally {
     clearTimeout(timeout);
-    state.voiceChecking = false;
-    $("voiceRefreshBtn").disabled = false;
-    if (!available) state.voiceRetryTimer = setTimeout(refreshVoices, 10000);
+    if (state.voiceController === controller) {
+      state.voiceController = null;
+      $("voiceRefreshBtn").disabled = false;
+      if (!available || starting) state.voiceRetryTimer = setTimeout(refreshVoices, 10000);
+    }
   }
 }
 function updateVoiceStyles() {
@@ -562,60 +741,102 @@ function speechText(text) {
              .replace(/[*_`#>]/g, "")
              .replace(/\s+/g, " ").trim();
 }
+function createSpeech(selectedVoice, styleId) {
+  return { engine: selectedVoice.engine, voiceId: selectedVoice.id ?? null,
+    styleId: selectedVoice.engine === "irodori" ? String(styleId) : Number(styleId),
+    queue: [], ready: [], pumping: false, playing: false, stopped: false,
+    abort: new AbortController(), audio: null };
+}
 function stopSpeech() {
   const s = state.speech;
   if (!s) return;
   s.stopped = true;
-  s.abort?.abort();
+  s.abort.abort();
   if (s.audio) { s.audio.pause(); s.audio.src = ""; }
+  for (const url of s.ready) URL.revokeObjectURL(url);
+  s.ready.length = 0;
   s.queue.length = 0;
   state.speech = null;
 }
+// Synthesis and playback progress independently; keep at most two completed clips ahead.
 async function pumpSpeech(s) {
-  if (s.pumping) return;
+  if (s.pumping || s.stopped) return;
   s.pumping = true;
   try {
-    while (!s.stopped && s.queue.length) {
+    while (!s.stopped && s.queue.length && s.ready.length < 2) {
       const text = s.queue.shift();
-      if (!text) continue;
-      s.abort = new AbortController();
+      const payload = s.engine === "irodori"
+        ? { text, engine: s.engine, voice_id: s.voiceId, preset: s.styleId }
+        : { text, engine: s.engine, style_id: s.styleId };
       const res = await fetch("/api/voice/synthesize", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, style_id: s.styleId, engine: s.engine }), signal: s.abort.signal,
+        body: JSON.stringify(payload), signal: s.abort.signal,
       });
       if (!res.ok) throw new Error(`音声合成: ${res.status}`);
-      const url = URL.createObjectURL(await res.blob());
+      const blob = await res.blob();
+      if (s.stopped) break;
+      s.ready.push(URL.createObjectURL(blob));
+      playSpeech(s);
+    }
+  } catch (e) {
+    if (!s.stopped && e.name !== "AbortError") {
+      $("voiceStatus").textContent = `${e.message}。文字回答は利用できます。`;
+      s.queue.length = 0;
+    }
+  } finally { s.pumping = false; }
+}
+async function playSpeech(s) {
+  if (s.playing || s.stopped) return;
+  s.playing = true;
+  try {
+    while (!s.stopped && s.ready.length) {
+      const url = s.ready.shift();
+      pumpSpeech(s);
       try {
-        if (s.stopped) break;
         const audio = new Audio(url);
         s.audio = audio;
         await new Promise((resolve, reject) => {
-          audio.onended = resolve;
-          audio.onerror = () => reject(new Error("音声を再生できません"));
-          s.abort.signal.addEventListener("abort", resolve, { once: true });
-          audio.play().catch(reject);
+          const ended = () => { s.abort.signal.removeEventListener("abort", ended); resolve(); };
+          const failed = () => { s.abort.signal.removeEventListener("abort", ended); reject(new Error("音声を再生できません")); };
+          audio.onended = ended;
+          audio.onerror = failed;
+          s.abort.signal.addEventListener("abort", ended, { once: true });
+          audio.play().catch(failed);
         });
-        s.audio = null;
-      } finally { URL.revokeObjectURL(url); }
+      } finally { s.audio = null; URL.revokeObjectURL(url); }
+      pumpSpeech(s);
     }
   } catch (e) {
-    if (!s.stopped && e.name !== "AbortError") $("voiceStatus").textContent = `${e.message}。文字回答は利用できます。`;
-  } finally { s.pumping = false; }
+    if (!s.stopped) {
+      $("voiceStatus").textContent = e.message;
+      stopSpeech();
+    }
+  } finally { s.playing = false; }
 }
 function queueSpeech(s, text) {
   if (!s || s.stopped || !text.trim()) return;
-  const cleaned = speechText(text);
+  let cleaned = speechText(text);
   if (cleaned) s.hasQueued = true;
-  for (let i = 0; i < cleaned.length; i += 180) s.queue.push(cleaned.slice(i, i + 180));
+  const limit = s.engine === "irodori" ? 90 : 180;
+  while (cleaned.length) {
+    let end = Math.min(limit, cleaned.length);
+    if (cleaned.length > limit) {
+      const punctuation = Math.max(cleaned.lastIndexOf("、", limit - 1), cleaned.lastIndexOf("，", limit - 1));
+      if (punctuation >= 30) end = punctuation + 1;
+    }
+    s.queue.push(cleaned.slice(0, end));
+    cleaned = cleaned.slice(end);
+  }
   pumpSpeech(s);
 }
 function readAgain() {
   if (state.controller || !state.lastReply || $("voiceStyle").disabled) return;
   stopSpeech();
   const selectedVoice = state.voices.find(voice => voice.key === $("voiceSpeaker").value);
-  const savedStyle = selectedVoice?.engine === state.lastReplyEngine
+  const savedStyle = selectedVoice?.engine === state.lastReplyEngine &&
+    (selectedVoice.engine !== "irodori" || selectedVoice.id === state.lastReplyVoice)
     ? selectedVoice.styles.find(style => style.id === state.lastReplyStyle) : null;
-  const s = { engine: selectedVoice.engine, styleId: savedStyle?.id ?? Number($("voiceStyle").value), queue: [], pumping: false, stopped: false, abort: null, audio: null };
+  const s = createSpeech(selectedVoice, savedStyle?.id ?? $("voiceStyle").value);
   state.speech = s;
   for (const sentence of speechText(state.lastReply).match(/[^。！？!?\n]+[。！？!?\n]?/g) ?? []) queueSpeech(s, sentence);
 }
@@ -684,7 +905,7 @@ async function send() {
   const selectedOption = $("voiceStyle").selectedOptions[0];
   const selectedVoice = state.voices.find(voice => voice.key === $("voiceSpeaker").value);
   const speech = $("speak").checked && !!selectedVoice
-    ? { engine: selectedVoice.engine, styleId: Number($("voiceStyle").value), queue: [], pumping: false, stopped: false, abort: null, audio: null }
+    ? createSpeech(selectedVoice, $("voiceStyle").value)
     : null;
   const autoStyle = !!speech && $("autoStyle").checked && !!selectedVoice;
   let speechStyleName = selectedOption?.textContent ?? "";
@@ -716,6 +937,7 @@ async function send() {
         while ((next = match.exec(pending))) {
           if (next.index >= 7) { boundary = next.index; break; }
         }
+        if (boundary < 0 && pending.length >= (speech.engine === "irodori" ? 90 : 180)) boundary = (speech.engine === "irodori" ? 90 : 180) - 1;
         if (boundary < 0) break;
         queueSpeech(speech, pending.slice(0, boundary + 1));
         speechOffset += boundary + 1;
@@ -811,9 +1033,10 @@ async function send() {
       state.lastReply = content;
       state.lastReplyStyle = speech?.styleId ?? null;
       state.lastReplyEngine = speech?.engine ?? null;
+      state.lastReplyVoice = speech?.voiceId ?? null;
       state.messages.push({ role: "assistant", content, model: st.active, ...(reasoning ? { reasoning } : {}),
                             ...(tools.size ? { tools: [...tools.values()] } : {}), ...(sources.length ? { sources } : {}),
-                            ...(speech ? { voice_style_id: speech.styleId, voice_style_name: speechStyleName, voice_engine: speech.engine } : {}) });
+                            ...(speech ? { voice_style_id: speech.styleId, voice_style_name: speechStyleName, voice_engine: speech.engine, voice_id: speech.voiceId } : {}) });
       saveConv();
     } else if (!completed) saveConv();
     // 次の送信を受け付け、通常の画面状態へ戻す。
@@ -841,6 +1064,14 @@ $("web").onchange = () => storePref("web", "webSearch");
 $("hist").onchange = () => { if ($("hist").value && !state.controller) openConv($("hist").value); };
 // モデル選択時に説明文を更新する。
 $("model").onchange = refresh;
+$("contextLength").oninput = () => {
+  if (contextValid()) {
+    const model = $("model").value;
+    state.contextValues[model] = $("contextLength").valueAsNumber;
+    try { localStorage.setItem("contextLength:" + model, $("contextLength").value); } catch {}
+  }
+  updateContextControls();
+};
 // 送信と中止ボタン。
 $("attachBtn").onclick = () => $("imageFiles").click();
 $("imageFiles").onchange = () => attachImages([...$("imageFiles").files]);
@@ -857,7 +1088,9 @@ $("stopAudioBtn").onclick = stopSpeech;
 $("readAgainBtn").onclick = readAgain;
 $("voiceRefreshBtn").onclick = refreshVoices;
 $("micBtn").onclick = toggleRecording;
-$("speak").onchange = () => { if (!$("speak").checked) stopSpeech(); };
+$("speak").onchange = toggleVoice;
+$("voiceEngine").onchange = () => { $("voiceMode").hidden = $("voiceEngine").value !== "irodori"; toggleVoice(); };
+$("voiceMode").onchange = toggleVoice;
 $("autoStyle").onchange = () => { storePref("autoStyle", "autoVoiceStyle"); updateVoiceStyles(); };
 $("voiceSpeaker").onchange = updateVoiceStyles;
 // 入力中に高さを調整する。
@@ -866,11 +1099,15 @@ $("input").addEventListener("input", autosize);
 $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });
+// 声ライブラリのスクリプトが読み込まれた後に起動する。
+window.addEventListener("DOMContentLoaded", () => {
 // ページ表示直後にサーバー状態と履歴一覧を取得する。
 refresh();
 refreshHistory();
-refreshVoices();
+resetVoiceControls("読み上げはOFFです");
+});
 </script>
+<script src="/static/voice-library.js"></script>
 <!-- body と html を閉じてページの終わりを示す。 -->
 </body>
 </html>

@@ -1,5 +1,7 @@
 # 01. llama.cpp とモデルのセットアップ
 
+2026-10-07の容量整理後、現在保持するLLMはFlash Next、Gemma 4、Qwen3.5-9B、Bonsai Abliteratedの4つ。以下には削除したモデルの導入・性能測定も履歴として残している。現在の構成は[一覧](README.md)、整理の実施結果は[容量調査](10-storage-audit.md#削除実施結果)を参照。
+
 ## 1. モデル選定の考え方
 
 - VRAM 12GB に全部載る Dense モデルは 14B 程度が上限。
@@ -16,7 +18,7 @@
 | `qwen3.8-27b` | Qwen3.8-27B | Dense 27B | UD-Q4_K_M | 16.5GB | GPU + CPU (`--fit`) |
 | `ternary-bonsai-2-27b` | Ternary Bonsai 2 27B | Dense 27B | PQ2_0 | 7.21GB | Prism ML fork / GPU |
 | `ternary-bonsai-2-27b-abliterated` | Hikari07jp v0.1 | Dense 27B | PQ2_0 | 7.21GB | Prism ML fork / GPU |
-| `qwen3.8-flash-next` | Qwen3.8 Flash Next | MoE 125B / active 6B | IQ2_XS | 約68GB | Strata / GPU + RAM + SSD |
+| `qwen3.8-flash-next` | Qwen3.8 Flash Next SC117 Abliterated | MoE 125B / active 6B | IQ3_XXS | 約76.14GB | Strata resident / GPU + RAM + SSD |
 
 Flash Next は専用エンジン Strata を使うため、[07-strata.md](07-strata.md) の手順を参照。
 

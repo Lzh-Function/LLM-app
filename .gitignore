@@ -22,6 +22,16 @@ models/
 /voicevox/linux-cpu-x64/
 /voicevox/data/
 /voicevox/cache/
+/irodori-tts/runtime/
+/irodori-tts/models/
+/irodori-tts/voices/
+/irodori-tts/install.json
+/irodori-tts/evaluation/
+/irodori-tts/gpu.lock
+/llm-chat/voice-library.lock
+/voice-synthesize/outputs/
+/voice-synthesize/productions/
+/llm-chat/voice-library/
 /aivisspeech/*.7z*
 /voicevox/*.7z*
 
@@ -64,3 +74,10 @@ build/
 Thumbs.db
 .vscode/
 .idea/
+
+# Qwen3-TTS runtime and downloaded weights
+/qwen-tts/runtime/
+/qwen-tts/models/
+/qwen-tts/install.json
+/qwen-tts/voices/
+/qwen-tts/evaluation/

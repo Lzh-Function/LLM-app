@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Voice Synthesize</title>
+<style>
+:root { color-scheme: light dark; --bg:light-dark(#f7f7f5,#161615); --panel:light-dark(#fff,#1f1f1d); --fg:light-dark(#1d1d1b,#e8e7e2); --line:light-dark(#e2e1dc,#34332f); --accent:light-dark(#2f6f5e,#6fbfa6); }
+[hidden] { display:none !important; }
+* { box-sizing:border-box; } body { margin:0; color:var(--fg); background:var(--bg); font:15px/1.6 system-ui,sans-serif; }
+header,main { max-width:1000px; margin:auto; padding:20px; } header { border-bottom:1px solid var(--line); }
+h1 { margin:0; font-size:24px; } h2 { font-size:19px; } section,.card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin:16px 0; }
+input,select,textarea,button { font:inherit; color:inherit; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:6px 10px; }
+textarea,input[type=text] { width:100%; } textarea { resize:vertical; } input[type=number] { width:110px; }
+button { cursor:pointer; } button.primary { background:var(--accent); color:var(--panel); } button:disabled { opacity:.5; cursor:default; }
+.row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:10px 0; } label { display:block; } audio { max-width:100%; } a { color:var(--accent); }
+small { opacity:.75; } #notice,#runtime { min-height:24px; } #notice { white-space:pre-wrap; } summary { cursor:pointer; }
+</style>
+<header>
+  <h1>Voice Synthesize</h1>
+  <p>Irodori Large・Qwen3-TTSで原稿から音声作品を制作します。完成した作品は原稿・設定と一緒に保存できます。</p>
+  <div class="row"><label>音声エンジン <select id="ttsEngine"><option value="irodori">Irodori v4 Large</option><option value="qwen">Qwen3-TTS 1.7B</option></select></label><button id="gpuOn" class="primary">GPUモデルを起動</button><button id="gpuOff">音声OFF・GPU解放</button><a href="http://localhost:5070" id="chatLink">llm-chatへ</a></div>
+  <small>GPUモデルの起動時にllm-chatのLLMをアンロードします。作業後は音声OFFにしてからLLMをロードしてください。</small>
+  <div id="runtime" role="status" aria-live="polite"></div>
+  <div id="notice" role="status" aria-live="polite"></div>
+</header>
+<main>
+<nav class="row" aria-label="作業を選択"><button id="productionTab" aria-pressed="true">音声作品を制作</button><button id="referenceTab" aria-pressed="false">llm-chat用の参照音声</button></nav>
+<div id="productionPage">
+<section>
+  <h2>長文から音声作品を制作</h2>
+  <p>参照音声の登録は不要です。声の説明と原稿を入力して制作できます。完成した作品は声ライブラリと別に保存します。</p>
+  <form id="synthesisForm">
+    <div class="row"><label>声の選び方 <select id="synthesisSource"><option value="description">作品専用の声を指定</option><option value="library">登録した声を使う</option><option value="product" hidden>保存した作品と同じ声</option></select></label><label>話し方 <select id="synthesisPreset"></select></label></div>
+    <label id="voiceDescriptionLabel">作品の声の説明<textarea id="synthesisVoiceCaption" rows="2" maxlength="1000" required placeholder="落ち着いた低めの声。丁寧で明瞭なナレーション。"></textarea></label>
+    <label id="libraryVoiceLabel" hidden>登録した声 <select id="synthesisVoice"></select></label>
+    <p id="productVoiceLabel" hidden></p>
+    <label>文章<textarea id="synthesisText" rows="5" maxlength="20000" required placeholder="読み上げる日本語を入力してください。長い文章も同じ参照の声で順番に合成します。"></textarea></label>
+    <div class="row"><label>原稿ファイル（UTF-8テキスト）<input id="manuscriptFile" type="file" accept="text/plain,.txt"></label><small id="textCount">0 / 20000文字</small></div>
+    <label>作品名<input id="synthesisName" type="text" value="音声作品" maxlength="80" required></label>
+    <p id="qwenNote" hidden><small>話し方は声の説明で指定し、参照音声から引き継ぎます。Qwenは先頭の参照WAVを使います。読み上げ内容が分かる参照では文章も使ってクローンします。</small></p>
+    <details><summary>話し方の説明・生成設定</summary>
+      <div id="qwenSettings" hidden>
+        <div class="row"><label>温度 <input id="qwenTemperature" type="number" value="0.9" min="0.01" max="2" step="0.01"></label><label>top-p <input id="qwenTopP" type="number" value="1" min="0.01" max="1" step="0.01"></label><label>top-k <input id="qwenTopK" type="number" value="50" min="1" max="1000"></label></div>
+        <div class="row"><label>反復ペナルティ <input id="qwenRepetition" type="number" value="1.05" min="1" max="2" step="0.01"></label><label>チャンクのトークン上限 <input id="qwenTokens" type="number" value="2048" min="256" max="4096"></label></div>
+        <label>参照WAVの読み上げ内容（任意）<textarea id="referenceText" rows="2" maxlength="6000" placeholder="取り込んだWAVの正確な文章。生成した参照は保存済みの文章を使います。"></textarea></label>
+        <small>文章がない取り込み音声は話者埋め込みのみで合成します。上の設定は声の候補作成にも使います。</small>
+      </div>
+      <label>話し方の説明<textarea id="synthesisCaption" rows="2" maxlength="1000" placeholder="空欄なら選んだ話し方を使います。参照と矛盾する声質の変更は避けてください。"></textarea></label>
+      <div class="row"><label>RFステップ <input id="synthesisSteps" type="number" value="40" min="4" max="120" required></label><label>seed <input id="synthesisSeed" type="number" min="0" max="4294967295" placeholder="ランダム"></label></div>
+      <div class="row"><label>文章CFG <input id="textCFG" type="number" value="3" min="0" max="10" step="0.1" required></label><label>説明CFG <input id="captionCFG" type="number" value="3" min="0" max="10" step="0.1" required></label><label>話者CFG <input id="speakerCFG" type="number" value="5" min="0" max="10" step="0.1" required></label></div>
+      <small id="rfNote">既定は公式評価と同じ40ステップです。反復を増やした場合の違いは試聴して確認してください。</small>
+    </details>
+    <div class="row"><button class="primary" type="submit">作品を合成して保存</button></div>
+  </form>
+</section>
+<section><h2>制作した音声作品</h2><button id="refreshOutputs">作品一覧を更新</button><div id="outputs"></div></section>
+</div>
+<div id="referencePage" hidden>
+<section>
+  <h2>llm-chat用の参照音声を作る</h2>
+  <p>会話で使い回す声を登録するための画面です。音声作品は「音声作品を制作」から作成します。</p>
+  <form id="candidateForm">
+    <label>声の説明<textarea id="candidateCaption" rows="2" maxlength="1000" required placeholder="声の高さ・響き・息の量・年齢感・話し方を記述してください。"></textarea></label>
+    <label>試聴文<textarea id="candidateText" rows="4" maxlength="600" required></textarea></label>
+    <label>候補名<input id="candidateName" type="text" value="声の候補" maxlength="80" required></label>
+    <div class="row"><label>seed <input id="candidateSeed" type="number" min="0" max="4294967295" placeholder="ランダム"></label><label>候補数 <input id="candidateCount" type="number" min="1" max="8" value="1" required></label><label>RFステップ <input id="candidateSteps" type="number" min="4" max="120" value="40" required></label><button class="primary" type="submit">GPUで候補を生成</button></div>
+    <small>候補は1つずつ生成します。気に入ったWAVを登録し、次の合成の参照として使います。</small>
+  </form>
+  <details><summary>手持ちのWAVを登録</summary><form id="importForm">
+    <label>表示名<input id="importName" type="text" maxlength="80" required></label>
+    <label>参照WAV<input id="importFile" type="file" accept="audio/wav,.wav" required></label>
+    <label>読み上げ内容（Qwenのクローン用・任意）<textarea id="importTranscript" rows="2" maxlength="6000"></textarea></label>
+    <label>出典・利用条件<input id="importSource" type="text" maxlength="1000"></label>
+    <button type="submit">声ライブラリに登録</button>
+  </form></details>
+</section>
+<section>
+  <h2>声ライブラリ</h2>
+  <div class="row"><label><input id="favoritesOnly" type="checkbox"> お気に入りのみ</label><button id="refreshLibrary">一覧を更新</button></div>
+  <div id="library"></div>
+</section>
+</div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const state = { runtime:null, busy:false, items:[], sourceProduct:null, engineInitialized:false };
+const json = (method, body) => ({method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+async function api(path, options={}) {
+  const res=await fetch(path,options);
+  if(!res.ok) { const data=await res.json().catch(()=>({})); throw new Error(data.detail ?? `${res.status}`); }
+  return res.status===204 ? null : res.json();
+}
+function seed(id) { return $(id).value==='' ? null : Number($(id).value); }
+function showRuntime(runtime) {
+  state.runtime=runtime;
+  if(!state.engineInitialized) { if(runtime.enabled && ['irodori','qwen'].includes(runtime.engine)) $('ttsEngine').value=runtime.engine; state.engineInitialized=true; engineControls(); }
+  const error=Object.values(runtime.errors??{}).join(' / ');
+  $('runtime').textContent=error || (!runtime.enabled?'音声はOFFです。':runtime.starting?'音声モデルをロード中…':runtime.ready?`${runtime.engine==='qwen'?'Qwen3-TTS 1.7B':'Irodori Large'} / ${runtime.profile.model_device} / ${runtime.profile.model_precision} を利用できます。`:'準備が完了していません。');
+  $('gpuOn').disabled=state.busy || runtime.starting;
+  $('ttsEngine').disabled=state.busy || runtime.starting;
+  $('gpuOff').disabled=!runtime.enabled;
+}
+async function refreshRuntime() {
+  try { showRuntime(await api('/api/voice/runtime')); }
+  catch(e) { $('runtime').textContent=e.message; }
+}
+async function mode(mode) {
+  showRuntime(await api('/api/voice/runtime',json('PUT',{enabled:true,mode,engine:$('ttsEngine').value})));
+  const deadline=Date.now()+900000;
+  while(!state.runtime.ready) {
+    if(Object.keys(state.runtime.errors??{}).length) throw new Error(Object.values(state.runtime.errors).join(' / '));
+    if(!state.runtime.enabled) throw new Error('音声の起動・合成を停止しました。');
+    if(Date.now()>deadline) throw new Error('モデルの準備がタイムアウトしました。');
+    await new Promise(resolve=>setTimeout(resolve,750));
+    showRuntime(await api('/api/voice/runtime'));
+  }
+}
+function qwenSettings() {
+  return {temperature:Number($('qwenTemperature').value),top_p:Number($('qwenTopP').value),top_k:Number($('qwenTopK').value),repetition_penalty:Number($('qwenRepetition').value),max_new_tokens:Number($('qwenTokens').value)};
+}
+function engineControls() {
+  const qwen=$('ttsEngine').value==='qwen';
+  $('candidateText').maxLength=qwen?160:600;
+  if(qwen && $('candidateText').value.length>160) $('candidateText').value=$('candidateText').value.slice(0,160);
+  $('qwenSettings').hidden=!qwen; $('qwenNote').hidden=!qwen; $('rfNote').hidden=qwen;
+  for(const id of ['synthesisPreset','synthesisCaption','synthesisSteps','textCFG','captionCFG','speakerCFG','candidateSteps']) {
+    $(id).disabled=qwen; $(id).closest('label').hidden=qwen;
+  }
+  if(qwen) { $('synthesisPreset').value='neutral'; $('synthesisCaption').value=''; }
+}
+$('ttsEngine').onchange=()=>{engineControls();if(state.runtime?.enabled) action(async()=>{await mode(state.runtime.mode);$('notice').textContent='音声エンジンを切り替えました。';},'音声エンジンを切り替えます…');};
+async function action(work,message='処理中…') {
+  if(state.busy) return;
+  state.busy=true; $('ttsEngine').disabled=true; $('notice').textContent=message;
+  document.querySelectorAll('form button').forEach(button=>button.disabled=true);
+  try { await work(); }
+  catch(e) { $('notice').textContent=e.message; }
+  finally { state.busy=false; $('ttsEngine').disabled=false; document.querySelectorAll('form button').forEach(button=>button.disabled=false); refreshRuntime(); }
+}
+async function library() {
+  const data=await api('/api/voice/library'); state.items=data.items;
+  if(!$('candidateText').value) $('candidateText').value=data.default_text;
+  engineControls();
+
+  const selected=$('synthesisVoice').value;
+  $('synthesisVoice').replaceChildren();
+  for(const item of data.items.filter(item=>item.kind==='voice')) $('synthesisVoice').add(new Option(item.name,item.id));
+  if(data.items.some(item=>item.id===selected)) $('synthesisVoice').value=selected;
+  renderLibrary();
+}
+function renderLibrary() {
+  $('library').replaceChildren();
+  const items=state.items.filter(item=>!$('favoritesOnly').checked||item.favorite);
+  if(!items.length) $('library').textContent='声の候補を作るか、参照WAVを登録してください。';
+  for(const item of items) {
+    const el=document.createElement('article'); el.className='card';
+    el.innerHTML=`<b>${esc(item.name)}</b> · ${item.kind==='voice'?'登録済み':'候補'} · ${item.references.reduce((n,r)=>n+r.seconds,0).toFixed(1)}秒
+      <p>${esc(item.provenance.caption??item.provenance.usage_notes??'取り込み音声')}</p>
+      <audio controls preload="none" src="/api/voice/library/${item.id}/audio"></audio>
+      <div class="row"><button data-favorite>${item.favorite?'★':'☆'} お気に入り</button><button data-use>${item.kind==='voice'?'この声で合成':'この声を登録'}</button><a href="/api/voice/library/${item.id}/audio">WAV保存</a><a href="/api/voice/library/${item.id}/metadata" target="_blank" rel="noopener">生成条件・SHA256</a><button data-delete>削除</button></div>
+      <div class="row"><input data-name type="text" maxlength="80" value="${esc(item.name)}" aria-label="声の名前"><button data-rename>名前を保存</button></div>
+      ${item.kind==='voice'?'<details><summary>同じ話者の補助参照を追加</summary><input data-file type="file" accept="audio/wav,.wav"><label><input data-same type="checkbox">同じ話者のクリップです（別seedの候補は混ぜません）</label><button data-append>参照を追加</button></details>':''}`;
+    const update=async body=>{await api(`/api/voice/library/${item.id}`,json('PATCH',body));await library();$('notice').textContent='保存しました。';};
+    el.querySelector('[data-favorite]').onclick=()=>action(()=>update({favorite:!item.favorite}));
+    el.querySelector('[data-rename]').onclick=()=>action(()=>update({name:el.querySelector('[data-name]').value.trim()}));
+    el.querySelector('[data-use]').onclick=()=>action(async()=>{if(item.kind!=='voice') await update({register:true});$('synthesisVoice').value=item.id;$('synthesisSource').value='library';updateSource();showPage('production');$('synthesisText').focus();$('notice').textContent='合成する声を選びました。';});
+    el.querySelector('[data-delete]').onclick=()=>{if(confirm(`「${item.name}」を削除しますか？`)) action(async()=>{await api(`/api/voice/library/${item.id}`,{method:'DELETE'});await library();$('notice').textContent='削除しました。';});};
+    el.querySelector('[data-append]')?.addEventListener('click',()=>action(async()=>{const file=el.querySelector('[data-file]').files[0];if(!file||!el.querySelector('[data-same]').checked) throw new Error('同じ話者のWAVを選んで確認してください');const form=new FormData();form.append('file',file);form.append('same_speaker','true');await api(`/api/voice/library/${item.id}/references`,{method:'POST',body:form});await library();$('notice').textContent='補助参照を追加しました。';}));
+    $('library').append(el);
+  }
+}
+async function outputs() {
+  const data=await api('/api/synthesis'); $('outputs').replaceChildren();
+  if(!data.items.length) $('outputs').textContent='制作した作品を原稿・設定と一緒に保存します。';
+  for(const item of data.items) {
+    const el=document.createElement('article'); el.className='card';
+    el.innerHTML=`<b>${esc(item.name)}</b> · ${esc(item.voice_name)} · ${item.engine==='qwen'?'Qwen3-TTS':'Irodori'}<p>${esc(item.text.slice(0,180))}</p><audio controls preload="none" src="/api/synthesis/${item.id}/audio"></audio><div class="row"><small>${item.metrics.elapsed_seconds.toFixed(2)}秒で合成 / 音声${item.metrics.audio_seconds.toFixed(2)}秒 / RTF ${item.metrics.rtf.toFixed(2)}</small><a href="/api/synthesis/${item.id}/audio">WAV保存</a><a href="/api/synthesis/${item.id}/manuscript">原稿TXT</a><a href="/api/synthesis/${item.id}/metadata" target="_blank" rel="noopener">生成条件</a>${item.schema_version>=2?`<a href="/api/synthesis/${item.id}/archive">作品ZIPを保存</a><button data-reuse>この作品をもとに制作</button>`:''}<button data-delete>作品を削除</button></div>`;
+    el.querySelector('[data-delete]').onclick=()=>{if(confirm(`作品「${item.name}」を削除しますか？`)) action(async()=>{await api(`/api/synthesis/${item.id}`,{method:'DELETE'});await outputs();$('notice').textContent='削除しました。';});};
+    el.querySelector('[data-reuse]')?.addEventListener('click',()=>{
+      state.sourceProduct=item;
+      $('synthesisSource').querySelector('[value="product"]').hidden=false;
+      $('synthesisSource').value='product'; updateSource();
+      $('synthesisText').value=item.text; $('synthesisText').dispatchEvent(new Event('input'));
+      $('synthesisName').value=(item.name+' 再制作').slice(0,80);
+      $('ttsEngine').value=item.engine??'irodori'; engineControls();
+      $('synthesisCaption').value=item.caption??'';
+      const settings=item.metrics.settings;
+      if(settings.num_steps!=null) $('synthesisSteps').value=settings.num_steps;
+      for(const [field,id] of [['temperature','qwenTemperature'],['top_p','qwenTopP'],['top_k','qwenTopK'],['repetition_penalty','qwenRepetition'],['max_new_tokens','qwenTokens']]) if(settings[field]!=null) $(id).value=settings[field];
+      $('referenceText').value='';
+      $('synthesisSeed').value=item.metrics.seed;
+      for(const [field,id] of [['cfg_scale_text','textCFG'],['cfg_scale_caption','captionCFG'],['cfg_scale_speaker','speakerCFG']]) if(settings[field]!=null) $(id).value=settings[field];
+      showPage('production'); $('synthesisText').focus();
+      $('notice').textContent='原稿・設定を読み込みました。作品に保存した声を使って新しい作品を制作します。';
+    });
+    $('outputs').append(el);
+  }
+}
+$('gpuOn').onclick=()=>action(async()=>{await mode('synthesize');$('notice').textContent='GPUモデルを起動しました。';},'LLMをアンロードしてGPUモデルを起動します…');
+$('gpuOff').onclick=async()=>{try{showRuntime(await api('/api/voice/runtime',json('PUT',{enabled:false,mode:state.runtime?.mode??'synthesize',engine:state.runtime?.engine??$('ttsEngine').value})));$('notice').textContent='音声モデルを停止しました。';}catch(e){$('notice').textContent=e.message;}};
+$('candidateForm').onsubmit=e=>{e.preventDefault();action(async()=>{await mode('design');await api('/api/voice/library/candidates',json('POST',{engine:$('ttsEngine').value,...qwenSettings(),caption:$('candidateCaption').value.trim(),text:$('candidateText').value.trim(),name:$('candidateName').value.trim(),seed:seed('candidateSeed'),count:Number($('candidateCount').value),num_steps:Number($('candidateSteps').value)}));await library();$('notice').textContent='候補を保存しました。試聴して使いたい声を登録してください。';},'GPUで声の候補を生成します…');};
+$('synthesisForm').onsubmit=e=>{e.preventDefault();action(async()=>{
+  const source=$('synthesisSource').value;
+  if(source==='library'&&!$('synthesisVoice').value) throw new Error('登録した声を選ぶか、作品専用の声を指定してください。');
+  if(source==='product'&&!state.sourceProduct) throw new Error('保存した作品を選んでください。');
+  await mode('synthesize');
+  await api('/api/synthesis',json('POST',{
+    engine:$('ttsEngine').value,...qwenSettings(),reference_text:$('referenceText').value.trim()||null,
+    voice_id:source==='library'?$('synthesisVoice').value:null,
+    source_product_id:source==='product'?state.sourceProduct.id:null,
+    voice_caption:$('synthesisVoiceCaption').value.trim(),
+    text:$('synthesisText').value.trim(),name:$('synthesisName').value.trim(),
+    caption:$('synthesisCaption').value.trim()||null,preset:$('synthesisPreset').value,
+    seed:seed('synthesisSeed'),num_steps:Number($('synthesisSteps').value),
+    cfg_scale_text:Number($('textCFG').value),cfg_scale_caption:Number($('captionCFG').value),cfg_scale_speaker:Number($('speakerCFG').value)
+  }));await outputs();$('notice').textContent='作品を保存しました。WAV・原稿・設定をダウンロードできます。';
+},'音声作品を制作しています…');};
+function showPage(page) {
+  $('productionPage').hidden=page!=='production'; $('referencePage').hidden=page!=='reference';
+  $('productionTab').setAttribute('aria-pressed',String(page==='production'));
+  $('referenceTab').setAttribute('aria-pressed',String(page==='reference'));
+}
+function updateSource() {
+  const source=$('synthesisSource').value;
+  $('voiceDescriptionLabel').hidden=source!=='description';
+  $('synthesisVoiceCaption').required=source==='description';
+  $('libraryVoiceLabel').hidden=source!=='library';
+  $('synthesisVoice').required=source==='library';
+  $('productVoiceLabel').hidden=source!=='product';
+  $('productVoiceLabel').textContent=state.sourceProduct?`「${state.sourceProduct.name}」に保存した声を使います。`:'';
+}
+$('productionTab').onclick=()=>showPage('production');
+$('referenceTab').onclick=()=>{showPage('reference');library().catch(e=>$('notice').textContent=e.message);};
+$('synthesisSource').onchange=()=>{updateSource();if($('synthesisSource').value==='library') library().catch(e=>$('notice').textContent=e.message);};
+$('synthesisText').oninput=()=>{$('textCount').textContent=`${Array.from($('synthesisText').value).length} / 20000文字`;};
+$('manuscriptFile').onchange=async()=>{
+  const file=$('manuscriptFile').files[0]; if(!file) return;
+  try{const text=await file.text();if(Array.from(text).length>20000) throw new Error('原稿は20000文字以下にしてください。');$('synthesisText').value=text;$('synthesisText').dispatchEvent(new Event('input'));}
+  catch(e){$('notice').textContent=e.message;}
+};
+$('refreshOutputs').onclick=()=>action(async()=>{await outputs();$('notice').textContent='作品一覧を更新しました。';});
+async function productionOptions() {
+  const data=await api('/api/synthesis/options');
+  $('synthesisVoiceCaption').value=data.default_voice_caption;
+  for(const preset of data.presets) $('synthesisPreset').add(new Option(preset.name,preset.id));
+}
+$('importForm').onsubmit=e=>{e.preventDefault();action(async()=>{const body=new FormData();body.append('file',$('importFile').files[0]);body.append('name',$('importName').value.trim());body.append('source',$('importSource').value.trim());body.append('transcript',$('importTranscript').value.trim());await api('/api/voice/library/import',{method:'POST',body});await library();$('notice').textContent='声を登録しました。';});};
+$('favoritesOnly').onchange=renderLibrary;
+$('refreshLibrary').onclick=()=>action(async()=>{await library();await outputs();$('notice').textContent='一覧を更新しました。';});
+refreshRuntime(); productionOptions().catch(e=>$('notice').textContent=e.message); outputs().catch(e=>$('notice').textContent=e.message); updateSource(); engineControls();
+setInterval(refreshRuntime,2000);
+</script>
+</html>

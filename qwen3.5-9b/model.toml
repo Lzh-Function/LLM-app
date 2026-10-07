@@ -3,4 +3,6 @@ id = "qwen3.5-9b"
 name = "Qwen3.5-9B"
 description = "Dense 9B・UD-Q5_K_XL・全層 GPU"
 order = 3
+default_context_length = 32768
+max_context_length = 262144
 mmproj = "models/mmproj-F16.gguf"

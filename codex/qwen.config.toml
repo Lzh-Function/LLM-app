@@ -1,0 +1,26 @@
+# Optional profile: codex -p qwen. Start serve-codex.sh in another terminal first.
+model = "qwen3.8-flash-next-sc117-abliterated-iq3_xxs"
+model_provider = "strata"
+model_catalog_json = "@CODEX_HOME@/flash-next-models.json"
+model_context_window = 131072
+model_auto_compact_token_limit = 98304
+model_reasoning_effort = "high"
+show_raw_agent_reasoning = true
+sandbox_mode = "workspace-write"
+web_search = "disabled"
+
+[sandbox_workspace_write]
+network_access = true
+
+[model_providers.strata]
+name = "Strata (local Flash Next)"
+base_url = "http://127.0.0.1:8080/v1"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+stream_idle_timeout_ms = 600000
+
+# Keep the local prompt focused on coding tools.
+[features]
+apps = false
+multi_agent = false

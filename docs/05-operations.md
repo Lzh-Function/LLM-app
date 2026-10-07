@@ -6,7 +6,8 @@
 |---|---|---|---|
 | チャット UI | 5070 | `cd /workspace/LLM/llm-chat && uv run llm-chat` | Ctrl+C / `pkill -x llm-chat` |
 | チャット UI 内部の llama-server | 5071 | UI から自動 | UI の「停止」/ `curl -X POST localhost:5070/api/unload` |
-| Codex 用 llama-server | 8080 | `CTX_SIZE=65536 PORT=8080 .../serve.sh` | Ctrl+C / `fuser -k 8080/tcp` ([04 参照](04-codex.md#codex-用サーバーの停止)) |
+| AivisSpeech / VOICEVOX | 10101 / 50021 | 起動時OFF。UIの「読み上げ」をONにすると起動（導入済み・ローカル接続先の場合） | 「読み上げ」をOFF、またはチャット終了で停止。手動起動したものはそのターミナルでCtrl+C |
+| Codex 用 Strata | 8080 | `bash qwen3.8-flash-next/serve-codex.sh` | 起動ターミナルでCtrl+C ([04 参照](04-codex.md#3-gpuとサーバー)) |
 
 バックグラウンドで起動する場合:
 
@@ -33,8 +34,9 @@ done
 | ファイル | 内容 |
 |---|---|
 | `/workspace/LLM/<モデル>/server.log` | チャット UI から起動した llama-server のログ (起動ごとに追記、ローテーションなし)。UI の「ログ」ボタンでも閲覧可 |
-| `/workspace/LLM/qwen3.6-35b-a3b/server-codex.log` | Codex テスト時に起動したサーバーのログ |
+| `/workspace/LLM/qwen3.8-flash-next/server-codex.log` | Codex テスト時に起動したサーバーのログ |
 | `/workspace/LLM/llm-chat/chat.log` | nohup 起動時の UI アクセスログ (URL とステータスのみ) |
+| `/workspace/LLM/aivisspeech/server.log`、`/workspace/LLM/voicevox/server.log` | 音声エンジン自動起動時のログ。合成するテキストが記録される場合がある |
 | `/workspace/LLM/llm-chat/history/` | 「履歴を保存」オン時の会話 (JSON + Markdown) |
 
 - 会話内容は llama-server のログには出ない (既定のログレベル)。
@@ -54,7 +56,7 @@ nvidia-smi --query-gpu=memory.used --format=csv,noheader
 free -h                                               # RAM (available を見る)
 ss -ltnp | grep -E "5070|5071|8080"                   # 待受ポート
 curl -s localhost:5070/api/status | jq                # UI の状態
-curl -s localhost:8080/health                         # llama-server の生存確認
+curl -s localhost:8080/health                         # Codex用Strataの生存確認
 /workspace/LLM/llama.cpp/llama-server --list-devices  # GPU 認識
 ```
 
@@ -93,7 +95,8 @@ autoMemoryReclaim=gradual
 | UI で「起動に失敗しました」 | 「ログ」ボタンで `server.log` を確認。VRAM 不足なら他の GPU プロセス (Codex 用 8080 サーバー等) を停止 |
 | モデル切替後に応答しない | `curl localhost:5070/api/status` で status を確認。`loading` が続く場合はログ参照 |
 | ウェブ検索で延々と終わらない | 思考ループの可能性。[03 の 6 章](03-web-search.md#6-思考ループ問題と対策) の設定 (`presence_penalty`、`LLM_SEARCH_THINKING_BUDGET`) を確認。UI の「中止」で止められる |
-| Codex が極端に遅い | ctx が大きすぎる。64k 以下にする ([04 の 4 章](04-codex.md#4-コンテキスト長と速度-重要)) |
+| Codex が極端に遅い | KVと専門家キャッシュの配分、RAM・swapを確認 ([04 の 4 章](04-codex.md#4-コンテキストとメモリ)) |
+| コンテキスト変更後にモデルが起動しない | 「メモリを解放中」の完了後、値を下げて再度「切り替え」、または別モデルを選ぶ。画面の「詳細ログ」でOOM・終了コードを確認。停止確認エラーの場合は「停止」で再試行 |
 | `LLM/` 移動後に `uv run` が失敗 | `.venv` 内の絶対パスが古い。`rm -rf .venv && uv sync` |
 | VS Code (Pylance) が `import httpx` を解決できない | インタプリタが旧 venv を指している。「Python: Select Interpreter」で `/workspace/LLM/llm-chat/.venv` を選択 |
 | ページ本文が取れない | ボット対策のあるサイト。`fetch_page` がエラーを返し、モデルは他の情報源で回答を試みる |

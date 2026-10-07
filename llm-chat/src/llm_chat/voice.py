@@ -7,12 +7,15 @@ import io
 import os
 import threading
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import httpx
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+
+from . import irodori
+from .voice_library import VoiceLibrary
 
 router = APIRouter(prefix="/api/voice")
 
@@ -32,6 +35,7 @@ VOICEVOX_SPEAKERS = {
     "ずんだもん", "冥鳴ひまり", "中国うさぎ", "東北ずん子", "東北きりたん"
 }
 ENGINE_URLS = {"aivis": AIVIS_URL, "voicevox": VOICEVOX_URL}
+LIBRARY = VoiceLibrary(Path(os.environ.get("LLM_VOICE_LIBRARY_DIR", APP_DIR / "voice-library")))
 SPEAKERS_TIMEOUT_S = 5
 
 _stt_model = None
@@ -115,6 +119,11 @@ async def styles_for_speaker(name: str) -> list[dict]:
     engine, separator, speaker_name = name.partition(":")
     if not separator:  # 古いクライアントからの AivisSpeech 話者名
         engine, speaker_name = "aivis", name
+    if engine == "irodori":
+        item = LIBRARY.get(speaker_name)
+        if item["kind"] != "voice":
+            raise HTTPException(422, "先に声を登録してください")
+        return irodori.styles()
     for speaker in await _speakers(engine):
         if speaker["name"] == speaker_name:
             return [
@@ -124,8 +133,32 @@ async def styles_for_speaker(name: str) -> list[dict]:
     raise HTTPException(422, "利用できない話者です")
 
 
+class RuntimeRequest(BaseModel):
+    enabled: bool
+    engine: Literal["legacy", "irodori"] | None = None
+    mode: Literal["chat", "design", "synthesize"] | None = None
+
+
+@router.get("/runtime")
+async def runtime_status(request: Request) -> dict:
+    return request.app.state.speech_runtime.snapshot()
+
+
+@router.put("/runtime")
+async def set_runtime(req: RuntimeRequest, request: Request) -> dict:
+    return await request.app.state.speech_runtime.set_enabled(req.enabled, req.engine, req.mode)
+
+
 @router.get("/voices")
-async def voices() -> list[dict]:
+async def voices(response: Response = None, request: Request = None) -> list[dict]:
+    runtime = getattr(request.app.state, "speech_runtime", None) if request is not None else None
+    if runtime is not None and not runtime.enabled:
+        return []
+    if runtime is not None and runtime.engine == "irodori":
+        if runtime.mode != "chat":
+            return []
+        await runtime.require_irodori("chat")
+        return irodori.library_voices(LIBRARY)
     result = []
     errors = []
     engines = list(ENGINE_URLS)
@@ -150,6 +183,8 @@ async def voices() -> list[dict]:
             })
     if not result and errors:
         raise HTTPException(503, " / ".join(errors))
+    if response is not None and runtime is not None and runtime.starting:
+        response.headers["X-Voice-Starting"] = "1"
     return result
 
 
@@ -171,16 +206,42 @@ async def transcribe(file: Annotated[UploadFile, File()]) -> dict:
 
 class SynthesisRequest(BaseModel):
     text: str = Field(min_length=1, max_length=200)
-    style_id: int
-    engine: str = "aivis"
+    style_id: int | None = None
+    engine: Literal["aivis", "voicevox", "irodori"] = "aivis"
+    voice_id: str | None = None
+    preset: str = "neutral"
 
 
 @router.post("/synthesize")
-async def synthesize(req: SynthesisRequest) -> Response:
+async def synthesize(req: SynthesisRequest, request: Request = None) -> Response:
+    runtime = getattr(request.app.state, "speech_runtime", None) if request is not None else None
+    if runtime is not None and not runtime.enabled:
+        raise HTTPException(409, "読み上げをONにしてください")
+    if req.engine == "irodori":
+        if runtime is None:
+            raise HTTPException(503, "音声ランタイムがありません")
+        await runtime.require_irodori("chat")
+        item = LIBRARY.get(req.voice_id or "")
+        if item["kind"] != "voice":
+            raise HTTPException(422, "登録済みの声を指定してください")
+        caption = irodori.caption_for(req.preset)
+        async with _tts_request_lock:
+            await runtime.require_irodori("chat")
+            references = await runtime.irodori.prepare(LIBRARY, item["id"])
+            await runtime.require_irodori("chat")
+            data, metrics = await runtime.irodori.speech(req.text, voice=item["id"] + "_0",
+                                                       caption=caption, mode="chat", references=references)
+        return Response(data, media_type="audio/wav", headers={
+            "X-TTS-Seconds": str(metrics["elapsed_seconds"]), "X-TTS-RTF": str(metrics["rtf"]),
+        })
+    if runtime is not None and runtime.engine != "legacy":
+        raise HTTPException(409, "AivisSpeech / VOICEVOXへ切り替えてください")
     allowed = {style["id"] for speaker in await _speakers(req.engine) for style in speaker["styles"]}
     if req.style_id not in allowed:
         raise HTTPException(422, "利用できない音声スタイルです")
     async with _tts_request_lock:
+        if runtime is not None and not runtime.enabled:
+            raise HTTPException(409, "読み上げをONにしてください")
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(120, connect=5)
