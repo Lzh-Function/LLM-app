@@ -291,6 +291,64 @@ class StandaloneTest(unittest.IsolatedAsyncioTestCase):
         audio = await self.client.get(f'/api/voice/library/{item["id"]}/audio')
         self.assertEqual(audio.content, wav(120))
 
+    async def test_rename_product_updates_saved_settings_and_zip_without_synthesis(self):
+        voice_item = self.library.create(wav(), name="参照名", kind="voice", provenance={})
+        first = (await self.client.post(
+            "/api/synthesis", json={"voice_id": voice_item["id"], "text": "原稿", "name": "変更前"}
+        )).json()
+        endpoint = f'/api/synthesis/{first["id"]}'
+        directory = self.root / "productions" / first["id"]
+        original_audio = (directory / "audio.wav").read_bytes()
+        original_settings = json.loads((directory / "settings.json").read_text())
+        self.runtime.enabled = self.runtime.ready = False
+        self.payloads.clear()
+        response = await self.client.patch(endpoint, json={"name": "  完成した作品<&>  "})
+        self.assertEqual(response.status_code, 200, response.text)
+        renamed = {**first, "name": "完成した作品<&>"}
+        self.assertEqual(response.json(), renamed)
+        self.assertEqual((await self.client.get(endpoint + "/metadata")).json(), renamed)
+        self.assertEqual((await self.client.get("/api/synthesis")).json()["items"], [renamed])
+        settings = (await self.client.get(endpoint + "/settings")).json()
+        self.assertEqual(settings, {**original_settings, "name": renamed["name"]})
+        self.assertEqual((await self.client.get(endpoint + "/audio")).content, original_audio)
+        self.assertEqual(self.library.get(voice_item["id"])["name"], "参照名")
+        package = await self.client.get(endpoint + "/archive")
+        with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
+            self.assertEqual(json.loads(archive.read("metadata.json")), renamed)
+            self.assertEqual(json.loads(archive.read("settings.json")), settings)
+            self.assertEqual(archive.read("audio.wav"), original_audio)
+            self.assertEqual(archive.read("manuscript.txt").decode(), first["text"])
+            reference_path = f'voice/{first["production_voice_id"]}/reference.wav'
+            self.assertEqual(archive.read(reference_path), wav())
+            self.assertEqual(len(archive.namelist()), len(set(archive.namelist())))
+        self.assertEqual(self.payloads, [])
+        self.assertFalse(list(directory.parent.glob(".rename-*")))
+
+    async def test_rename_rejects_invalid_names_and_unknown_products(self):
+        first = (await self.client.post("/api/synthesis", json={"text": "原稿"})).json()
+        endpoint = f'/api/synthesis/{first["id"]}'
+        for name in ("", " \n\t ", "字" * 81, None):
+            with self.subTest(name=name):
+                response = await self.client.patch(endpoint, json={"name": name})
+                self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual((await self.client.get(endpoint + "/metadata")).json(), first)
+        response = await self.client.patch(endpoint, json={"name": "字" * 80})
+        self.assertEqual(response.status_code, 200, response.text)
+        for identifier in ("a" * 32, "invalid"):
+            response = await self.client.patch(f"/api/synthesis/{identifier}", json={"name": "変更"})
+            self.assertEqual(response.status_code, 404, response.text)
+
+    async def test_failed_rename_archive_keeps_original_product(self):
+        first = (await self.client.post("/api/synthesis", json={"text": "原稿"})).json()
+        directory = self.root / "productions" / first["id"]
+        originals = {file: (directory / file).read_bytes() for file in ("metadata.json", "settings.json", "product.zip")}
+        with patch("llm_chat.synthesis_products.write_archive", side_effect=OSError("disk failure")):
+            with self.assertRaises(OSError):
+                await self.client.patch(f'/api/synthesis/{first["id"]}', json={"name": "変更"})
+        for file, content in originals.items():
+            self.assertEqual((directory / file).read_bytes(), content)
+        self.assertFalse(list(directory.parent.glob(".rename-*")))
+
     async def test_extra_reference_uses_remaining_duration_and_full_group_rejects(self):
         item = self.library.create(wav(100), name="声", kind="voice", provenance={})
         endpoint = f'/api/voice/library/{item["id"]}/references'
@@ -316,6 +374,71 @@ class StandaloneTest(unittest.IsolatedAsyncioTestCase):
         item = response.json()
         self.assertEqual(item["references"][0]["seconds"], 120)
         self.assertEqual(self.library.audio_path(item["id"]).read_bytes(), wav(120))
+
+    async def test_uploaded_production_trims_reference_and_reuses_it_without_library(self):
+        with patch.object(self.library, "create", side_effect=AssertionError("shared library accessed")):
+            response = await self.client.post(
+                "/api/synthesis/upload",
+                data={"settings": json.dumps({"text": "アップロードした声で原稿を読みます。", "seed": 123})},
+                files={"file": ("録音.wav", wav(121), "audio/wav")},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        first = response.json()
+        self.assertEqual(first["voice_source"]["kind"], "upload")
+        self.assertEqual(first["voice_name"], "録音")
+        self.assertEqual(first["references"][0]["seconds"], 120)
+        self.assertEqual(first["references"][0]["trimmed_from_seconds"], 121)
+        self.assertEqual(len(self.payloads), 1)  # Use the upload directly, without voice design.
+        self.assertNotEqual(self.payloads[0]["voice"], "none")
+        self.assertIn("ref_latents", self.payloads[0]["irodori"])
+        self.assertEqual(self.library.list(), [])
+        package = await self.client.get(f'/api/synthesis/{first["id"]}/archive')
+        with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
+            path = f'voice/{first["production_voice_id"]}/reference.wav'
+            self.assertEqual(archive.read(path), wav(120))
+            saved = json.loads(archive.read(path.replace("reference.wav", "metadata.json")))
+            self.assertEqual(saved["references"], first["references"])
+        response = await self.client.post(
+            "/api/synthesis", json={"source_product_id": first["id"], "text": "別の原稿"}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        second = response.json()
+        self.assertEqual(second["references"], first["references"])
+        self.assertEqual(len(self.payloads), 2)
+        await self.client.delete(f'/api/synthesis/{first["id"]}')
+        package = await self.client.get(f'/api/synthesis/{second["id"]}/archive')
+        with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
+            self.assertEqual(archive.read(f'voice/{second["production_voice_id"]}/reference.wav'), wav(120))
+
+    async def test_upload_rejects_invalid_wav_settings_and_conflicting_sources(self):
+        valid = {"text": "原稿"}
+        cases = [
+            (json.dumps(valid), b"invalid"),
+            (json.dumps(valid), wav(121)[:-100]),
+            ("not json", wav()),
+            (json.dumps({"text": " "}), wav()),
+            (json.dumps({**valid, "voice_id": "a" * 32}), wav()),
+            (json.dumps({**valid, "source_product_id": "a" * 32}), wav()),
+        ]
+        for settings, data in cases:
+            with self.subTest(settings=settings):
+                response = await self.client.post(
+                    "/api/synthesis/upload", data={"settings": settings},
+                    files={"file": ("reference.wav", data, "audio/wav")},
+                )
+                self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(self.payloads, [])
+        self.assertEqual((await self.client.get("/api/synthesis")).json()["items"], [])
+
+    async def test_failed_uploaded_synthesis_cleans_private_reference(self):
+        with patch.object(self.runtime.irodori, "speech", AsyncMock(side_effect=HTTPException(503, "failed"))):
+            response = await self.client.post(
+                "/api/synthesis/upload", data={"settings": json.dumps({"text": "原稿"})},
+                files={"file": ("reference.wav", wav(121), "audio/wav")},
+            )
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertFalse(list((self.root / "productions").glob("*")))
+        self.assertEqual(self.library.list(), [])
 
     async def test_20000_character_manuscript_is_forwarded_and_preserved_in_zip(self):
         text = "長文の原稿です。" * 2500
@@ -487,6 +610,12 @@ class StandaloneTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             (await self.client.get(f"/api/synthesis/{identifier}/audio")).content, wav()
         )
+        renamed = await self.client.patch(f"/api/synthesis/{identifier}", json={"name": "旧作品の新しい名前"})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(renamed.json(), {**legacy, "name": "旧作品の新しい名前"})
+        self.assertEqual(json.loads((directory / "metadata.json").read_text()), renamed.json())
+        self.assertFalse((directory / "settings.json").exists())
+        self.assertFalse((directory / "product.zip").exists())
         for body in (
             {
                 "text": " ",

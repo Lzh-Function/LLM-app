@@ -64,6 +64,7 @@ function renderLibrary() {
     const duration = item.references.reduce((sum, ref) => sum + ref.seconds, 0);
     // Only local immutable IDs form URLs; captions and names are escaped text.
     card.innerHTML = `<b>${esc(item.name)}</b> · ${item.kind === "voice" ? "登録済み" : "候補"}
+      <details data-name-editor><summary>名前を変更</summary><form class="actions" data-name-form><label>参照ボイス名<input data-name type="text" maxlength="80" required value="${esc(item.name)}"></label><button type="submit">保存</button><button data-name-cancel type="button">キャンセル</button></form></details>
       <div><small>${duration.toFixed(1)}秒 · 参照${item.references.length}件 · seed ${item.provenance.seed ?? "—"}</small></div>
       <p>${esc(item.provenance.caption ?? item.provenance.usage_notes ?? "取り込み音声")}</p>
       <audio controls preload="none" src="/api/voice/library/${item.id}/audio"></audio>
@@ -74,7 +75,7 @@ function renderLibrary() {
         <a href="/api/voice/library/${item.id}/audio">WAVを保存</a>
         <a href="/api/voice/library/${item.id}/metadata" target="_blank" rel="noopener">生成条件・SHA256</a>
       </div>
-      <div class="actions"><input data-name type="text" maxlength="80" aria-label="声の表示名" value="${esc(item.name)}"><button data-rename type="button">名前を保存</button><button data-delete type="button">削除</button></div>
+      <div class="actions"><button data-delete type="button">削除</button></div>
       ${item.kind === "voice" ? '<details><summary>同じ話者の補助参照を追加</summary><input data-reference type="file" accept="audio/wav,.wav"><label class="opt"><input data-same-speaker type="checkbox">同じ話者のクリップです（別seedの候補は混ぜません）</label><button data-append type="button">参照を追加</button></details>' : ''}`;
     const update = async (body) => {
       await libraryFetch(`/${item.id}`, libraryJSON("PATCH", body));
@@ -84,7 +85,18 @@ function renderLibrary() {
     };
     card.querySelector("[data-favorite]").onclick = () => libraryAction(() => update({ favorite: !item.favorite }));
     card.querySelector("[data-register]")?.addEventListener("click", () => libraryAction(() => update({ register: true })));
-    card.querySelector("[data-rename]").onclick = () => libraryAction(() => update({ name: card.querySelector("[data-name]").value.trim() }));
+    const editor = card.querySelector("[data-name-editor]"), nameInput = card.querySelector("[data-name]");
+    editor.addEventListener("toggle", () => { if (editor.open) { nameInput.focus(); nameInput.select(); } });
+    card.querySelector("[data-name-cancel]").onclick = () => { nameInput.value = item.name; editor.open = false; };
+    card.querySelector("[data-name-form]").onsubmit = e => {
+      e.preventDefault();
+      libraryAction(async () => {
+        const name = nameInput.value.trim();
+        if (!name || name.length > 80) throw new Error("名前は1～80文字で入力してください。");
+        await update({ name });
+        $("libraryStatus").textContent = "名前を変更しました。";
+      }, "名前を保存します…");
+    };
     card.querySelector("[data-delete]").onclick = () => {
       if (confirm(`「${item.name}」と参照音声を削除しますか？`)) libraryAction(async () => {
         stopSpeech();

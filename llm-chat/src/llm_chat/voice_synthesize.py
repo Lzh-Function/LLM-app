@@ -12,17 +12,27 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from . import irodori, qwen_tts, voice, voice_library_api
+from .dialogue import (
+    MAX_OUTPUT_BYTES,
+    MAX_OUTPUT_SECONDS,
+    ReferenceUpload,
+    SpeakerSpec,
+    assemble_wavs,
+    parse_script,
+    speech_chunks,
+    validate_labels,
+)
 from .synthesis_products import ProductStore, copy_voice
-from .voice_library import VoiceLibrary
-from .voice_requests import SynthesisSettings
+from .voice_library import MAX_REFERENCE_UPLOAD_BYTES, VoiceLibrary, wav_info
+from .voice_requests import RenameRequest, SynthesisSettings
 from .voice_runtime import VoiceRuntime, local_address
 
 ROOT = Path(os.environ.get("LLM_ROOT", voice.APP_DIR.parent))
@@ -114,6 +124,7 @@ async def runtime_update(req: RuntimeRequest, request: Request):
 
 
 class SynthesisRequest(SynthesisSettings):
+    speakers: list[SpeakerSpec] | None = None
     reference_text: str | None = Field(default=None, max_length=6000)
     text: str = Field(min_length=1, max_length=20000)
     voice_id: str | None = None
@@ -164,9 +175,35 @@ def installed_provenance(runtime, mode, health):
     return provider.installed_provenance(ROOT, mode, health)
 
 
-async def production_voice(req: SynthesisRequest, stage: Path, runtime):
+async def production_voice(
+    req: SynthesisRequest,
+    stage: Path,
+    runtime,
+    upload: tuple[str, bytes] | None = None,
+):
     private = VoiceLibrary(stage / "voice")
-    if req.source_product_id:
+    if upload is not None:
+        filename, data = upload
+        item = await asyncio.to_thread(
+            private.create,
+            data,
+            name=Path(filename).stem[:80] or "アップロードした参照音声",
+            kind="voice",
+            trim_reference=True,
+            provenance={
+                "source": "upload",
+                "filename": filename,
+                "text": (req.reference_text or "").strip(),
+            },
+        )
+        provenance = {
+            "kind": "upload",
+            "filename": filename,
+            "transcript_ignored_due_to_trim": bool(
+                item["provenance"].get("source_text")
+            ),
+        }
+    elif req.source_product_id:
         previous = products().get(req.source_product_id)
         identifier = previous.get("production_voice_id")
         if not identifier:
@@ -232,7 +269,7 @@ async def production_voice(req: SynthesisRequest, stage: Path, runtime):
             "caption": req.voice_caption.strip(),
             "seed": metrics["seed"],
         }
-    if req.reference_text is not None:
+    if req.reference_text is not None and upload is None:
         # Preserve the user-supplied transcript inside this product, never change the shared voice.
         item["provenance"]["reference_text"] = req.reference_text.strip()
         (private.directory(item["id"]) / "metadata.json").write_text(
@@ -243,6 +280,233 @@ async def production_voice(req: SynthesisRequest, stage: Path, runtime):
 
 @app.post("/api/synthesis")
 async def synthesize(req: SynthesisRequest, request: Request):
+    return await create_production(req, request)
+
+
+@app.post("/api/synthesis/upload")
+async def synthesize_upload(
+    request: Request,
+    settings: Annotated[str, Form()],
+    file: Annotated[UploadFile | None, File()] = None,
+    files: Annotated[list[UploadFile] | None, File()] = None,
+):
+    try:
+        req = SynthesisRequest.model_validate_json(settings)
+    except ValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if req.voice_id or req.source_product_id:
+        raise HTTPException(
+            422, "参照WAVのアップロードと登録済みの声・作品の声は同時に指定できません"
+        )
+    if file is not None and files:
+        raise HTTPException(422, "file と files はどちらか一方を指定してください")
+    selected = [file] if file is not None else (files or [])
+    if not selected:
+        raise HTTPException(422, "参照WAVを選んでください")
+    if req.speakers is not None and len(req.speakers) != len(selected):
+        raise HTTPException(422, "参照WAVと話者設定の数を一致させてください")
+    specs = (
+        req.speakers if req.speakers is not None else [SpeakerSpec() for _ in selected]
+    )
+    labels = [spec.label for spec in specs]
+    validate_labels(labels)
+    parse_script(req.text, labels)
+    if len(selected) > 1 and req.reference_text is not None:
+        raise HTTPException(
+            422, "複数話者の参照文章は各 speakers の reference_text に指定してください"
+        )
+    uploads, total = [], 0
+    for selected_file, spec in zip(selected, specs):
+        data = await selected_file.read(MAX_REFERENCE_UPLOAD_BYTES - total + 1)
+        total += len(data)
+        if total > MAX_REFERENCE_UPLOAD_BYTES:
+            raise HTTPException(422, "参照WAVは合計256 MiB以下にしてください")
+        await asyncio.to_thread(
+            wav_info, data, max_seconds=None, max_bytes=MAX_REFERENCE_UPLOAD_BYTES
+        )
+        uploads.append(
+            ReferenceUpload(
+                Path(selected_file.filename or "reference.wav").name,
+                data,
+                spec.label,
+                spec.reference_text
+                if spec.reference_text is not None
+                else req.reference_text,
+            )
+        )
+    return await create_production(req, request, uploads=uploads)
+
+
+async def dialogue_voices(stage, uploads, previous, source_product_id):
+    private, speakers = VoiceLibrary(stage / "voice"), []
+    if uploads is not None:
+        for upload in uploads:
+            item = await asyncio.to_thread(
+                private.create,
+                upload.data,
+                name=upload.label or Path(upload.filename).stem[:80],
+                kind="voice",
+                trim_reference=True,
+                provenance={
+                    "source": "upload",
+                    "filename": upload.filename,
+                    "text": (upload.reference_text or "").strip(),
+                },
+            )
+            speakers.append(
+                {
+                    "label": upload.label,
+                    "production_voice_id": item["id"],
+                    "voice_name": item["name"],
+                    "references": item["references"],
+                    "voice_source": {
+                        "kind": "upload",
+                        "filename": upload.filename,
+                        "transcript_ignored_due_to_trim": bool(
+                            item["provenance"].get("source_text")
+                        ),
+                    },
+                }
+            )
+    else:
+        source = VoiceLibrary(products().directory(source_product_id) / "voice")
+        for speaker in previous["speakers"]:
+            item = await asyncio.to_thread(
+                copy_voice, source, source.get(speaker["production_voice_id"]), private
+            )
+            original = speaker["voice_source"]
+            while original.get("kind") == "product":
+                original = original.get("original", {})
+            speakers.append(
+                {
+                    **speaker,
+                    "production_voice_id": item["id"],
+                    "references": item["references"],
+                    "voice_source": {
+                        "kind": "product",
+                        "product_id": source_product_id,
+                        "original": original,
+                        "transcript_ignored_due_to_trim": bool(
+                            item["provenance"].get("source_text")
+                        ),
+                    },
+                }
+            )
+    return private, speakers
+
+
+async def render_dialogue(req, runtime, stage, private, speakers, turns, caption):
+    started = time.perf_counter()
+    prepared = {}
+    base_seed = req.seed if req.seed is not None else secrets.randbits(32)
+    segments = []
+    directory = stage / "segments"
+    directory.mkdir()
+    for turn_index, turn in enumerate(turns):
+        speaker = speakers[turn["speaker_index"]]
+        identifier = speaker["production_voice_id"]
+        if identifier not in prepared:
+            await runtime.require_tts("synthesize", req.engine)
+            prepared[identifier] = await runtime.tts.prepare(private, identifier)
+        for text in speech_chunks(turn["text"]):
+            if not text.strip():
+                continue
+            await runtime.require_tts("synthesize", req.engine)
+            data, metrics = await runtime.tts.speech(
+                text,
+                voice=identifier + "_0",
+                caption=caption,
+                mode="synthesize",
+                seed=(base_seed + len(segments)) % 2**32,
+                references=prepared[identifier],
+                settings={
+                    **req.sampling_settings(),
+                    **({"chunking_enabled": False} if req.engine == "irodori" else {}),
+                },
+            )
+            info = wav_info(
+                data, max_seconds=MAX_OUTPUT_SECONDS, max_bytes=MAX_OUTPUT_BYTES
+            )
+            # Reject excessive output before asking the model for another segment.
+            if (
+                sum(s["metrics"]["audio_seconds"] for s in segments)
+                + info["seconds"]
+                + len(segments)
+                > MAX_OUTPUT_SECONDS
+            ):
+                raise HTTPException(422, "連結した作品は4時間以下にしてください")
+            if sum(s["bytes"] for s in segments) + len(data) > MAX_OUTPUT_BYTES:
+                raise HTTPException(422, "連結した作品は1 GiB以下にしてください")
+            file = f"segments/{len(segments) + 1:04d}.wav"
+            await asyncio.to_thread((stage / file).write_bytes, data)
+            segments.append(
+                {
+                    "label": speaker["label"],
+                    "production_voice_id": identifier,
+                    "turn_index": turn_index,
+                    "text": text,
+                    "file": file,
+                    "bytes": len(data),
+                    "metrics": {**metrics, "audio_seconds": info["seconds"]},
+                }
+            )
+    data, timeline = await asyncio.to_thread(
+        assemble_wavs, [stage / s["file"] for s in segments]
+    )
+    for segment, timing in zip(segments, timeline):
+        segment.update(timing)
+    info = wav_info(data, max_seconds=MAX_OUTPUT_SECONDS, max_bytes=MAX_OUTPUT_BYTES)
+    elapsed = time.perf_counter() - started
+    return (
+        data,
+        {
+            "elapsed_seconds": elapsed,
+            "audio_seconds": info["seconds"],
+            "rtf": elapsed / info["seconds"],
+            "seed": base_seed,
+            "settings": req.sampling_settings(),
+            "wav_sha256": info["sha256"],
+            "sample_rate": info["sample_rate"],
+            "chunks": len(segments),
+            "turns": len(turns),
+            "speaker_count": len(speakers),
+            "gap_seconds": 1.0,
+            "reference_cache": "ref_latents"
+            if req.engine == "irodori"
+            else "prompt_id",
+        },
+        segments,
+    )
+
+
+async def create_production(
+    req: SynthesisRequest,
+    request: Request,
+    uploads: list[ReferenceUpload] | None = None,
+):
+    previous = products().get(req.source_product_id) if req.source_product_id else None
+    if req.speakers is not None and uploads is None:
+        raise HTTPException(422, "話者設定は参照WAVアップロード時に指定してください")
+    multiple = bool(
+        (uploads and (len(uploads) > 1 or uploads[0].label))
+        or (previous and previous.get("speakers"))
+    )
+    if (
+        multiple
+        and req.reference_text is not None
+        and len(uploads or previous["speakers"]) > 1
+    ):
+        raise HTTPException(422, "複数話者の再制作では保存済みの参照文章を使います")
+    turns = (
+        parse_script(
+            req.text,
+            [u.label for u in uploads]
+            if uploads
+            else [s["label"] for s in previous["speakers"]],
+        )
+        if multiple
+        else None
+    )
     runtime = request.app.state.speech_runtime
     await runtime.require_tts("synthesize", req.engine)
     caption = (
@@ -260,31 +524,66 @@ async def synthesize(req: SynthesisRequest, request: Request):
         identifier, stage = await asyncio.to_thread(store.stage)
         started = time.perf_counter()
         try:
-            private, item, source = await production_voice(req, stage, runtime)
-            await runtime.require_tts("synthesize", req.engine)
-            references = await runtime.tts.prepare(private, item["id"], item=item)
-            await runtime.require_tts("synthesize", req.engine)
-            health = await runtime.tts.health()
-            data, metrics = await runtime.tts.speech(
-                req.text,
-                voice=item["id"] + "_0",
-                caption=caption,
-                mode="synthesize",
-                seed=req.seed,
-                references=references,
-                settings={
-                    **req.sampling_settings(),
-                    **(
-                        {
-                            "chunking_enabled": True,
-                            "chunk_min_chars": 80,
-                            "chunk_max_chars": 160,
-                        }
-                        if req.engine == "irodori"
-                        else {}
+            if multiple:
+                private, speakers = await dialogue_voices(
+                    stage, uploads, previous, req.source_product_id
+                )
+                if (
+                    len(speakers) == 1
+                    and uploads is None
+                    and req.reference_text is not None
+                ):
+                    saved_item = private.get(speakers[0]["production_voice_id"])
+                    saved_item["provenance"]["reference_text"] = (
+                        req.reference_text.strip()
+                    )
+                    await asyncio.to_thread(private.save, saved_item)
+                item = private.get(speakers[0]["production_voice_id"])
+                source = {
+                    "kind": "multi_upload" if uploads else "multi_product",
+                    "transcript_ignored_due_to_trim": any(
+                        s["voice_source"].get("transcript_ignored_due_to_trim")
+                        for s in speakers
                     ),
-                },
-            )
+                }
+                if req.source_product_id:
+                    source["product_id"] = req.source_product_id
+                data, metrics, segments = await render_dialogue(
+                    req, runtime, stage, private, speakers, turns, caption
+                )
+            else:
+                if uploads:
+                    req = req.model_copy(
+                        update={"reference_text": uploads[0].reference_text}
+                    )
+                upload = (uploads[0].filename, uploads[0].data) if uploads else None
+                private, item, source = await production_voice(
+                    req, stage, runtime, upload
+                )
+                await runtime.require_tts("synthesize", req.engine)
+                references = await runtime.tts.prepare(private, item["id"], item=item)
+                await runtime.require_tts("synthesize", req.engine)
+                data, metrics = await runtime.tts.speech(
+                    req.text,
+                    voice=item["id"] + "_0",
+                    caption=caption,
+                    mode="synthesize",
+                    seed=req.seed,
+                    references=references,
+                    settings={
+                        **req.sampling_settings(),
+                        **(
+                            {
+                                "chunking_enabled": True,
+                                "chunk_min_chars": 80,
+                                "chunk_max_chars": 160,
+                            }
+                            if req.engine == "irodori"
+                            else {}
+                        ),
+                    },
+                )
+            health = await runtime.tts.health()
             result = {
                 "schema_version": 2,
                 "engine": req.engine,
@@ -311,6 +610,31 @@ async def synthesize(req: SynthesisRequest, request: Request):
                 "production_voice_id": item["id"],
                 "reference_sha256": [ref["sha256"] for ref in item["references"]],
             }
+            if multiple:
+                result.update(
+                    {
+                        "schema_version": 3,
+                        "speakers": speakers,
+                        "segments": segments,
+                        "voice_name": " / ".join(
+                            s["label"] or s["voice_name"] for s in speakers
+                        ),
+                        "references": [
+                            {**ref, "speaker": s["label"]}
+                            for s in speakers
+                            for ref in s["references"]
+                        ],
+                    }
+                )
+                settings.update(
+                    {
+                        "speakers": speakers,
+                        "gap_seconds": 1.0,
+                        "reference_sha256": [
+                            ref["sha256"] for ref in result["references"]
+                        ],
+                    }
+                )
             # Wait for atomic publication even if the HTTP client disconnects.
             publish = asyncio.create_task(
                 asyncio.to_thread(store.publish, stage, data, result, settings)
@@ -331,6 +655,11 @@ async def outputs():
     return {"items": await asyncio.to_thread(products().list)}
 
 
+@app.patch("/api/synthesis/{identifier}")
+async def rename_output(identifier: str, req: RenameRequest):
+    return await asyncio.to_thread(products().rename, identifier, req.name)
+
+
 @app.get("/api/synthesis/{identifier}/audio")
 async def audio(identifier: str):
     return FileResponse(
@@ -343,6 +672,34 @@ async def audio(identifier: str):
 @app.get("/api/synthesis/{identifier}/metadata")
 async def metadata(identifier: str):
     return await asyncio.to_thread(products().get, identifier)
+
+
+@app.get("/api/synthesis/{identifier}/speakers/{index}/audio")
+async def speaker_audio(identifier: str, index: int):
+    store = products()
+    speakers = store.get(identifier).get("speakers", [])
+    if index < 0 or index >= len(speakers):
+        raise HTTPException(404, "話者が見つかりません")
+    library = VoiceLibrary(store.directory(identifier) / "voice")
+    path = await asyncio.to_thread(
+        library.audio_path, speakers[index]["production_voice_id"]
+    )
+    return FileResponse(
+        path, media_type="audio/wav", filename=f"{identifier}-speaker-{index + 1}.wav"
+    )
+
+
+@app.get("/api/synthesis/{identifier}/segments/{index}/audio")
+async def segment_audio(identifier: str, index: int):
+    store = products()
+    segments = store.get(identifier).get("segments", [])
+    if index < 0 or index >= len(segments):
+        raise HTTPException(404, "生成区間が見つかりません")
+    return FileResponse(
+        store.directory(identifier) / segments[index]["file"],
+        media_type="audio/wav",
+        filename=f"{identifier}-segment-{index + 1}.wav",
+    )
 
 
 @app.get("/api/synthesis/{identifier}/manuscript")

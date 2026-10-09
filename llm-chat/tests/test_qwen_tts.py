@@ -162,6 +162,36 @@ class ProductTest(unittest.IsolatedAsyncioTestCase):
             p.stop()
         self.temp.cleanup()
 
+    async def test_uploaded_reference_clones_directly_and_drops_trimmed_transcript(self):
+        for seconds in (1, 121):
+            self.calls.clear()
+            response = await self.client.post(
+                "/api/synthesis/upload",
+                data={"settings": json.dumps({
+                    "engine": "qwen", "text": "作品の原稿", "reference_text": "参照の全文",
+                })},
+                files={"file": ("reference.wav", wav(seconds), "audio/wav")},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            result = response.json()
+            prepares = [r for r in self.calls if r.url.path == "/local/voices/prepare"]
+            speech = [json.loads(r.content) for r in self.calls if r.url.path == "/v1/audio/speech"]
+            self.assertEqual(len(prepares), 1)
+            self.assertEqual(len(speech), 1)
+            self.assertIn("prompt_id", speech[0]["qwen"])
+            self.assertIn(wav(min(seconds, 120)), prepares[0].content)
+            private = VoiceLibrary(self.root / "products" / result["id"] / "voice")
+            provenance = private.get(result["production_voice_id"])["provenance"]
+            if seconds > 120:
+                self.assertEqual(provenance["text"], "")
+                self.assertEqual(provenance["source_text"], "参照の全文")
+                self.assertNotIn("参照の全文".encode(), prepares[0].content)
+                self.assertTrue(result["voice_source"]["transcript_ignored_due_to_trim"])
+            else:
+                self.assertIn("参照の全文".encode(), prepares[0].content)
+                self.assertEqual(provenance["text"], "参照の全文")
+        self.assertEqual(self.library.list(), [])
+
     async def test_20000_character_manuscript_is_forwarded_and_preserved_in_zip(self):
         text = "長文の原稿です。" * 2500
         self.assertEqual(len(text), 20000)

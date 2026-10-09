@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from . import irodori, qwen_tts, voice
 from .voice_library import MAX_REFERENCE_UPLOAD_BYTES, MAX_WAV_BYTES
-from .voice_requests import SynthesisSettings
+from .voice_requests import DisplayName, SynthesisSettings
 
 router = APIRouter(prefix="/api/voice/library")
 DEFAULT_TEXT = (
@@ -39,7 +39,7 @@ class CandidateRequest(SynthesisSettings):
 
 
 class UpdateRequest(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=80)
+    name: DisplayName | None = None
     favorite: bool | None = None
     register_voice: bool = Field(default=False, alias="register")
 

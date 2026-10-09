@@ -124,7 +124,7 @@ uv run llm-chat                # http://localhost:5070
 
 1. `http://localhost:5080`で「GPUモデルを起動」を押す。llm-chatが動いていれば`POST /api/unload`でLLMを停止し、Largeのロードと短文ウォームアップを待つ。llm-chat自体の起動は不要。
 2. 「声を作る」に声の説明・試聴文・seedを入力して候補生成。試聴して「声として登録」を押す。手持ちのWAVも登録できる。
-3. 「音声作品を制作」で作品の声の説明・原稿・作品名を入力して合成する。声ライブラリの登録は不要。「登録した声を使う」も選べ、参照WAVを作品側へコピーする。最大20000文字を文単位に分割し、同じ参照latentを使って結合する。句読点がない長い文も160文字以下に分け、1回のGPU推論への巨大な入力を避ける。
+3. 「音声作品を制作」で作品の声の説明・原稿・作品名を入力して合成する。「参照WAVをアップロード」を選べば手持ちのWAVを直接使える。声ライブラリの登録は不要。「登録した声を使う」も選べ、参照WAVを作品側へコピーする。最大20000文字を文単位に分割し、同じ参照latentを使って結合する。句読点がない長い文も160文字以下に分け、1回のGPU推論への巨大な入力を避ける。
 4. 完成WAVを再生・ダウンロード。原稿TXT・生成設定・作品専用の声・完成音声は専用の`productions/`へ保存する。「作品ZIPを保存」で一式を取得できる。「この作品をもとに制作」では保存した声のまま原稿・設定を変えて新しい作品を作る。生成条件、参照SHA、モデルrevision、合成時間、RTFもJSONで保存する。「詳細設定」ではステップ数・CFG・seedを調整できる。ステップ増加が常に音質向上になるとは限らないので試聴して選ぶ。
 5. 「音声OFF・GPU解放」で管理プロセスを終了し、GPUを解放する。LLMは自動で再ロードしない。
 
@@ -208,6 +208,7 @@ voice-synthesize/outputs/<ID>/       旧形式の合成結果（読み取り互�
 | 別文章で比較 | `POST /api/voice/library/<ID>/preview` (`text`, `preset`, `mode`, `seed`) |
 | 会話読み上げ（llm-chat） | `POST /api/voice/synthesize` (`engine: "irodori"`, `voice_id`, `preset`, `text`) |
 | 独立長文合成 | `POST /api/synthesis` (`text`, `name`, `voice_caption`, `preset`, `caption`, `seed`, RF設定)。任意で`voice_id`または`source_product_id`を指定 |
+| WAVアップロードで作品を合成 | `POST /api/synthesis/upload`（multipartの`file`とJSON文字列の`settings`）。PCM WAVは256 MiBまで、120秒超は先頭120秒を作品専用の参照として保存（保存後32 MiB以下）。作品ZIP・再制作へ引き継ぐ |
 | 作品一覧・保存 | `GET /api/synthesis`, `GET /api/synthesis/<ID>/audio` / `manuscript` / `settings` / `metadata` / `archive` |
 | 制作画面の選択肢 | `GET /api/synthesis/options`（声ライブラリを読まず取得可能） |
 | 削除 | `DELETE /api/voice/library/<ID>` / `DELETE /api/synthesis/<ID>` |

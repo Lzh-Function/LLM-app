@@ -1,8 +1,16 @@
 """Validated RF settings for voice design and independent high-quality synthesis."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
+
+DisplayName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)
+]
+
+
+class RenameRequest(BaseModel):
+    name: DisplayName
 
 
 class RFSettings(BaseModel):

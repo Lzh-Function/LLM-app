@@ -31,11 +31,14 @@ models/
 /llm-chat/voice-library.lock
 /voice-synthesize/outputs/
 /voice-synthesize/productions/
+/voice-synthesize/productions.lock
 /llm-chat/voice-library/
 /aivisspeech/*.7z*
 /voicevox/*.7z*
 
 # Local conversations, recordings, and logs
+# ONNX Runtime telemetry session sidecar
+:memory:.ses
 /llm-chat/history/
 /qwen3.8-flash-next/codex-traces/
 /docs/tmp_*

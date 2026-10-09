@@ -112,7 +112,8 @@ class IrodoriClient:
         async with self._lock:
             item = item if item is not None else library.get(identifier)
             signature = ":".join(ref["sha256"] for ref in item["references"])
-            key = f"{identifier}:{signature}"
+            # Latents are keyed by audio content, independent of private product IDs.
+            key = signature
             if key in self._references:
                 return self._references[key]
             try:

@@ -28,6 +28,8 @@ from qwen_tts import Qwen3TTSModel
 from qwen_tts.inference.qwen3_tts_model import VoiceClonePromptItem
 
 ROOT = Path(__file__).resolve().parent
+MAX_REFERENCE_SECONDS = 120
+MAX_REFERENCE_UPLOAD_BYTES = 256 * 1024 * 1024
 MANIFEST = json.loads((ROOT / "install.json").read_text())
 LOCK = threading.RLock()
 model = None
@@ -110,21 +112,28 @@ def prepare(
     file: Annotated[UploadFile, File()],
     transcript: Annotated[str, Form(max_length=6000)] = "",
 ):
-    data = file.file.read(32 * 1024 * 1024 + 1)
-    if len(data) > 32 * 1024 * 1024:
-        raise HTTPException(422, "Reference WAV exceeds 32 MiB")
+    data = file.file.read(MAX_REFERENCE_UPLOAD_BYTES + 1)
+    if len(data) > MAX_REFERENCE_UPLOAD_BYTES:
+        raise HTTPException(422, "Reference WAV exceeds 256 MiB")
     try:
         audio, rate = sf.read(io.BytesIO(data), dtype="float32")
-        if not len(audio) or len(audio) / rate > 120 or not np.isfinite(audio).all():
-            raise ValueError("Reference must be finite and at most 120 seconds")
+        if not len(audio) or not np.isfinite(audio).all():
+            raise ValueError("Reference must contain finite audio samples")
+        source_seconds = len(audio) / rate
+        trimmed = source_seconds > MAX_REFERENCE_SECONDS
+        audio = audio[: MAX_REFERENCE_SECONDS * rate]
         if audio.ndim == 2:
             audio = audio.mean(axis=1)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(422, str(exc)) from exc
+    # A full-source transcript no longer matches a cropped reference.
+    transcript_ignored = trimmed and bool(transcript.strip())
+    transcript = "" if trimmed else transcript.strip()
     signature = hashlib.sha256(
         data
-        + transcript.strip().encode()
+        + transcript.encode()
         + json.dumps(MANIFEST["models"]["base"], sort_keys=True).encode()
+        + (f"\0trim:{MAX_REFERENCE_SECONDS}".encode() if trimmed else b"")
     ).hexdigest()
     directory = ROOT / "voices" / ".prompts"
     path = directory / f"{signature}.pt"
@@ -133,8 +142,8 @@ def prepare(
         if not path.is_file():
             items = engine.create_voice_clone_prompt(
                 ref_audio=(audio, rate),
-                ref_text=transcript.strip() or None,
-                x_vector_only_mode=not bool(transcript.strip()),
+                ref_text=transcript or None,
+                x_vector_only_mode=not bool(transcript),
             )
             records = [
                 {
@@ -151,9 +160,14 @@ def prepare(
             temp.replace(path)
     return {
         "prompt_id": signature,
-        "clone_mode": "icl" if transcript.strip() else "speaker_embedding_only",
+        "clone_mode": "icl" if transcript else "speaker_embedding_only",
         "reference_policy": "primary_clip",
         "reference_sha256": hashlib.sha256(data).hexdigest(),
+        "source_reference_seconds": source_seconds,
+        "reference_seconds": len(audio) / rate,
+        "max_reference_seconds": MAX_REFERENCE_SECONDS,
+        "reference_trimmed": trimmed,
+        "transcript_ignored_due_to_trim": transcript_ignored,
     }
 
 

@@ -22,6 +22,8 @@ bash voice-synthesize/serve.sh
 
 「この作品をもとに制作」では、保存済みの声と設定を使って別原稿を制作できる。
 「登録した声を使う」では、既存のIrodori/Qwen生成声や取り込みWAVも選べる。参照音声を作品内へコピーするため、元ライブラリを削除しても作品の再制作は可能。
+「参照WAVをアップロード」では、ライブラリへ登録せずに手持ちのWAVを作品合成に使える。アップロードは最大256 MiB、120秒超は先頭120秒を自動で使う。切り取り後の作品用参照は最大32 MiB。
+複数ファイルを選ぶ場合は各ファイルに異なる話者ラベルを付け、原稿を`[speaker A]文章[speaker B]文章`のように区切る。各話者の参照と文章から個別のクローンプロンプトを作り、再登場では再利用する。各区間を独立して合成し、長い区間も最大160文字ずつに分割して、すべての生成区間の間に1秒の無音を入れる。アップロード256 MiBはファイル合計、参照120秒・32 MiBは各話者ごとの上限。
 作品専用の声をllm-chatの声ライブラリへ自動登録することはない。
 
 「llm-chat用の参照音声」画面でもQwenの声候補を作り、試聴して登録できる。
@@ -56,6 +58,15 @@ FlashAttentionは導入せず、PyTorch SDPAを明示している。この環境
 参照文章がなければ`x_vector_only_mode=True`で話者埋め込みのみを使う。条件の`metrics.clone_mode`に`icl`または`speaker_embedding_only`を記録する。
 Qwenでは先頭の参照WAV一つを使う。Irodori用の補助参照を追加していてもQwenは結合しない。
 参照としては短く明瞭な音声を用意すると扱いやすい。作品専用に生成する既定の参照文章は約50文字。
+
+### 参照音声の長さと自動切り取り
+
+公式READMEは[3秒の音声によるクローン](https://github.com/QwenLM/Qwen3-TTS#released-models-description-and-download)を紹介している。3秒は最大長ではない。
+導入済みの公式SDKと[現在の公式実装](https://github.com/QwenLM/Qwen3-TTS/blob/main/qwen_tts/inference/qwen3_tts_model.py)の`create_voice_clone_prompt`には、参照を一定秒数で拒否・切り取りする処理や`--max-ref-seconds`設定はない。受け取った音声を音声トークナイザーと話者埋め込み抽出へ渡す。無制限に動作する保証はなく、長い参照ではメモリ使用量が増え、ICLでは参照音声コード・文章もモデルへの入力になる。
+
+この環境では作品制作とQwenバックエンドを先頭120秒までに揃えている。`POST /local/voices/prepare`も120秒超の音声を自動で切り取り、最大256 MiBまで受け付ける。120秒以下の参照はそのまま使う。
+切り取った場合は、参照全文が切り取り音声に一致しなくなるため`transcript`をクローンには使わず、話者埋め込み方式にする。120秒以下の音声に正確な文章を添えればICL方式を使える。
+バックエンドの準備結果に`source_reference_seconds`、`reference_seconds`、`reference_trimmed`、`transcript_ignored_due_to_trim`を返す。`reference_sha256`はアップロード元音声のSHA256。
 
 Baseに自由な話し方の指示を与える機能はないため、感情プリセット・追加captionはQwen選択中は無効にしている。
 話し方はVoiceDesignの声の説明で指定し、その参照から引き継ぐ。APIもQwenで非neutralプリセットや追加captionを指定した場合は422を返す。
@@ -93,6 +104,7 @@ curl -sS -X PUT http://localhost:5080/api/voice/runtime \
 ```
 
 候補生成は`mode: "design"`をONにして`POST /api/voice/library/candidates`へ`engine: "qwen"`、`caption`、`text`を指定する。
+作品へWAVを直接アップロードするAPIは`POST /api/synthesis/upload`。multipartの`file`にWAV、`settings`に`{"engine":"qwen","text":"原稿","reference_text":"参照の読み上げ内容（任意）"}`というJSON文字列を指定する。`voice_id`・`source_product_id`との同時指定はできない。
 取り込みWAVのmultipartフィールドに任意の`transcript`を追加できる。
 既存の保存作品はIrodoriとして扱い、設定を再利用する時は作品のエンジンを選び直す。
 
@@ -153,6 +165,10 @@ Pythonの62テストでGPU排他、切り替え、失敗時の解放、原稿保
 ```bash
 uv run --project llm-chat python -m unittest discover -s llm-chat/tests -q
 node llm-chat/tests/test_voice_queue.cjs
+node llm-chat/tests/test_synthesis_upload.cjs
+qwen-tts/.venv/bin/python -m unittest discover -s qwen-tts/tests -q
 ```
+
+参照アップロードはQwenの作品制作APIとバックエンド準備処理で検証している。バックエンドのテストではモデル推論をモックに置き換え、120秒境界、先頭音声の保持、32 MiBを超える元音声、切り取り時の文章除外、キャッシュ再利用、不正音声の拒否を確認する。実モデルでの120秒参照による音質・VRAM測定は未実施。
 
 2026-10-07に原稿上限を20000文字へ拡張。UI・TXT取り込み・制作API・両バックエンドを揃え、20000文字の原稿保持とZIP保存、20001文字の拒否を検証した。Qwenの実バックエンドAPIでは推論をスタブに置き換え、125チャンク全てに同じ声のプロンプトを渡すことを確認した。20000文字全体の実モデルでの合成は未実施。

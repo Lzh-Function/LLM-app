@@ -173,6 +173,27 @@ class IrodoriAPITest(unittest.IsolatedAsyncioTestCase):
         self.patch.stop()
         self.temp.cleanup()
 
+    async def test_rename_saved_voice_persists_without_changing_reference_or_gpu(self):
+        item = self.library.create(wav(), name="変更前", kind="voice", provenance={"seed": 42})
+        self.library.append_reference(item["id"], wav(2))
+        original = self.library.update(item["id"], favorite=True)
+        self.runtime.enabled = self.runtime.ready = False
+        endpoint = f'/api/voice/library/{item["id"]}'
+        response = await self.client.patch(endpoint, json={"name": "  チャットの声  "})
+        self.assertEqual(response.status_code, 200, response.text)
+        renamed = {**original, "name": "チャットの声"}
+        self.assertEqual(response.json(), renamed)
+        self.assertEqual((await self.client.get(endpoint + "/metadata")).json(), renamed)
+        self.assertEqual(VoiceLibrary(self.library.root).get(item["id"]), renamed)
+        self.assertEqual(self.library.audio_path(item["id"]).read_bytes(), wav())
+        self.assertEqual(self.library.audio_path(item["id"], 1).read_bytes(), wav(2))
+        self.assertEqual(irodori.library_voices(self.library)[0]["name"], "チャットの声")
+        for name in ("", " \n\t ", "字" * 81):
+            response = await self.client.patch(endpoint, json={"name": name})
+            self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(self.library.get(item["id"]), renamed)
+        self.assertEqual(self.requests, [])
+
     async def test_design_register_and_mf_chat_use_distinct_samplers_and_fixed_reference(
         self,
     ):

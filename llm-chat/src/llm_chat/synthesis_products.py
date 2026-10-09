@@ -4,17 +4,27 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
 import uuid
 import zipfile
 from pathlib import Path
 
 from fastapi import HTTPException
 
-from .voice_library import IDENTIFIER, VoiceLibrary
+from .voice_library import IDENTIFIER, VoiceLibrary, serialized_mutation
 
 
 def write_json(path: Path, value: dict):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+
+def write_archive(directory: Path, target: Path, replacements: dict | None = None):
+    replacements = replacements or {}
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(directory.rglob("*")):
+            if path.is_file() and path.name != "product.zip" and path.suffix != ".lock":
+                relative = str(path.relative_to(directory))
+                archive.write(replacements.get(relative, path), arcname=relative)
 
 
 class ProductStore:
@@ -68,18 +78,32 @@ class ProductStore:
         write_json(stage / "settings.json", settings)
         write_json(stage / "metadata.json", metadata)
         # Include private voice WAVs and their provenance in the portable package.
-        with zipfile.ZipFile(
-            stage / "product.zip", "w", zipfile.ZIP_DEFLATED
-        ) as archive:
-            for path in sorted(stage.rglob("*")):
-                if (
-                    path.is_file()
-                    and path.name != "product.zip"
-                    and path.suffix != ".lock"
-                ):
-                    archive.write(path, arcname=str(path.relative_to(stage)))
+        write_archive(stage, stage / "product.zip")
         stage.rename(self.root / metadata["id"])
 
+    @serialized_mutation
+    def rename(self, identifier: str, name: str) -> dict:
+        directory = self.directory(identifier)
+        metadata = self.get(identifier)
+        metadata["name"] = name
+        # Prepare the complete replacement package before changing saved files.
+        with tempfile.TemporaryDirectory(prefix=".rename-", dir=directory.parent) as temp:
+            pending = Path(temp)
+            replacements = {"metadata.json": pending / "metadata.json"}
+            write_json(replacements["metadata.json"], metadata)
+            if (directory / "settings.json").is_file():
+                settings = json.loads((directory / "settings.json").read_text())
+                settings["name"] = name
+                replacements["settings.json"] = pending / "settings.json"
+                write_json(replacements["settings.json"], settings)
+            if (directory / "product.zip").is_file():
+                write_archive(directory, pending / "product.zip", replacements)
+                (pending / "product.zip").replace(directory / "product.zip")
+            for filename, path in reversed(list(replacements.items())):
+                path.replace(directory / filename)
+        return metadata
+
+    @serialized_mutation
     def delete(self, identifier: str):
         shutil.rmtree(self.directory(identifier))
 
@@ -96,4 +120,8 @@ def copy_voice(source: VoiceLibrary, item: dict, destination: VoiceLibrary) -> d
         copied = destination.append_reference(
             copied["id"], source.audio_path(item["id"], index).read_bytes()
         )
-    return copied
+    for original, reference in zip(item["references"], copied["references"]):
+        for key in ("trimmed_from_seconds", "source_sha256"):
+            if key in original:
+                reference[key] = original[key]
+    return destination.save(copied)
