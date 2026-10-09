@@ -47,6 +47,7 @@
   },
   "draft_vocab": "cjk",
   "open_browser": false,
+  "api_monitor": true,
   "vision": {
     "exe": "@ROOT@/strata/engine/strata-vision",
     "mmproj": "@ROOT@/Strata-data/models/mmproj-Qwen3.8-Flash-Next-BF16.gguf",

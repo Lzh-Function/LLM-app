@@ -276,6 +276,47 @@ class StandaloneTest(unittest.IsolatedAsyncioTestCase):
             p.stop()
         self.temp.cleanup()
 
+    async def test_long_import_is_cropped_and_transcript_is_not_reused(self):
+        response = await self.client.post(
+            "/api/voice/library/import",
+            data={"name": "長い録音", "transcript": "カット前の全文"},
+            files={"file": ("long.wav", wav(121), "audio/wav")},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()
+        self.assertEqual(item["references"][0]["seconds"], 120)
+        self.assertEqual(item["references"][0]["trimmed_from_seconds"], 121)
+        self.assertEqual(item["provenance"]["text"], "")
+        self.assertEqual(item["provenance"]["source_text"], "カット前の全文")
+        audio = await self.client.get(f'/api/voice/library/{item["id"]}/audio')
+        self.assertEqual(audio.content, wav(120))
+
+    async def test_extra_reference_uses_remaining_duration_and_full_group_rejects(self):
+        item = self.library.create(wav(100), name="声", kind="voice", provenance={})
+        endpoint = f'/api/voice/library/{item["id"]}/references'
+        payload = {"same_speaker": "true"}
+        files = {"file": ("extra.wav", wav(121), "audio/wav")}
+        response = await self.client.post(endpoint, data=payload, files=files)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["references"][1]["seconds"], 20)
+        self.assertEqual(self.library.audio_path(item["id"], 1).read_bytes(), wav(20))
+        response = await self.client.post(endpoint, data=payload, files=files)
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(len(self.library.get(item["id"])["references"]), 2)
+
+    async def test_import_larger_than_previous_upload_limit_is_cropped(self):
+        data = wav(1100)
+        self.assertGreater(len(data), 32 * 1024 * 1024)
+        response = await self.client.post(
+            "/api/voice/library/import",
+            data={"name": "長い録音"},
+            files={"file": ("long.wav", data, "audio/wav")},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()
+        self.assertEqual(item["references"][0]["seconds"], 120)
+        self.assertEqual(self.library.audio_path(item["id"]).read_bytes(), wav(120))
+
     async def test_20000_character_manuscript_is_forwarded_and_preserved_in_zip(self):
         text = "長文の原稿です。" * 2500
         self.assertEqual(len(text), 20000)

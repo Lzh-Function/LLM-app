@@ -11,7 +11,7 @@ import httpx
 from fastapi import HTTPException
 from llm_chat import irodori, server, voice
 from llm_chat.voice_control import separate_style, sse
-from llm_chat.voice_library import VoiceLibrary, wav_info
+from llm_chat.voice_library import VoiceLibrary, trim_reference_wav, wav_info
 from llm_chat.voice_runtime import VoiceRuntime
 
 
@@ -71,6 +71,33 @@ class LibraryTest(unittest.TestCase):
         for identifier in ("../test", "A" * 32, "none", "../../.env"):
             with self.assertRaises(HTTPException):
                 self.library.get(identifier)
+
+    def test_trim_preserves_stereo_pcm_samples_and_format(self):
+        buffer = io.BytesIO()
+        prefix = b"\x01\x02\x03\x04\x05\x06" * (120 * 8000)
+        with wave.open(buffer, "wb") as output:
+            output.setnchannels(2)
+            output.setsampwidth(3)
+            output.setframerate(8000)
+            output.writeframes(prefix + b"\x07" * (6 * 8000))
+        trimmed, info = trim_reference_wav(buffer.getvalue())
+        self.assertEqual(info["seconds"], 120)
+        self.assertEqual(info["trimmed_from_seconds"], 121)
+        self.assertEqual(info["sha256"], wav_info(trimmed)["sha256"])
+        self.assertNotEqual(info["source_sha256"], info["sha256"])
+        with wave.open(io.BytesIO(trimmed)) as audio:
+            self.assertEqual((audio.getnchannels(), audio.getsampwidth(), audio.getframerate()), (2, 3, 8000))
+            self.assertEqual(audio.readframes(audio.getnframes()), prefix)
+
+    def test_trim_rejects_corrupt_full_source_and_preserves_short_wav(self):
+        for data in (b"invalid", wav(121)[:-100]):
+            with self.subTest(size=len(data)), self.assertRaises(HTTPException):
+                trim_reference_wav(data)
+        for seconds in (1, 120):
+            data = wav(seconds)
+            trimmed, info = trim_reference_wav(data)
+            self.assertEqual(trimmed, data)
+            self.assertNotIn("trimmed_from_seconds", info)
 
 
 class IrodoriAPITest(unittest.IsolatedAsyncioTestCase):
@@ -247,6 +274,12 @@ class IrodoriAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.requests, [])
 
     async def test_import_group_preview_and_delete(self):
+        rejected = await self.client.post(
+            "/api/voice/library/import",
+            data={"name": "長い録音"},
+            files={"file": ("reference.wav", wav(121), "audio/wav")},
+        )
+        self.assertEqual(rejected.status_code, 422)
         result = await self.client.post(
             "/api/voice/library/import",
             data={"name": "録音", "source": "自分の声"},

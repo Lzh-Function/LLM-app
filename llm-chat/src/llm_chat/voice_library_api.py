@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, model_validator
 
 from . import irodori, qwen_tts, voice
+from .voice_library import MAX_REFERENCE_UPLOAD_BYTES, MAX_WAV_BYTES
 from .voice_requests import SynthesisSettings
 
 router = APIRouter(prefix="/api/voice/library")
@@ -103,17 +104,21 @@ async def generate(req: CandidateRequest, request: Request) -> dict:
 
 @router.post("/import")
 async def import_voice(
+    request: Request,
     file: Annotated[UploadFile, File()],
     name: Annotated[str, Form(min_length=1, max_length=80)],
     source: Annotated[str, Form(max_length=1000)] = "",
     transcript: Annotated[str, Form(max_length=6000)] = "",
 ) -> dict:
-    data = await file.read(32 * 1024 * 1024 + 1)
+    trim_reference = getattr(request.app.state, "trim_reference_uploads", False)
+    max_bytes = MAX_REFERENCE_UPLOAD_BYTES if trim_reference else MAX_WAV_BYTES
+    data = await file.read(max_bytes + 1)
     return await asyncio.to_thread(
         voice.LIBRARY.create,
         data,
         name=name,
         kind="voice",
+        trim_reference=trim_reference,
         provenance={
             "source": "import",
             "usage_notes": source,
@@ -137,14 +142,19 @@ async def update(identifier: str, req: UpdateRequest) -> dict:
 @router.post("/{identifier}/references")
 async def add_reference(
     identifier: str,
+    request: Request,
     file: Annotated[UploadFile, File()],
     same_speaker: Annotated[bool, Form()],
 ) -> dict:
     if not same_speaker:
         raise HTTPException(422, "同じ話者のクリップであることを確認してください")
-    data = await file.read(32 * 1024 * 1024 + 1)
+    trim_reference = getattr(request.app.state, "trim_reference_uploads", False)
+    max_bytes = MAX_REFERENCE_UPLOAD_BYTES if trim_reference else MAX_WAV_BYTES
+    data = await file.read(max_bytes + 1)
     async with voice._tts_request_lock:
-        return await asyncio.to_thread(voice.LIBRARY.append_reference, identifier, data)
+        return await asyncio.to_thread(
+            voice.LIBRARY.append_reference, identifier, data, trim_reference=trim_reference
+        )
 
 
 @router.get("/{identifier}/audio")

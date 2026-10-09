@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Voice Synthesize", lifespan=lifespan)
+app.state.trim_reference_uploads = True
 app.include_router(voice_library_api.router)
 
 

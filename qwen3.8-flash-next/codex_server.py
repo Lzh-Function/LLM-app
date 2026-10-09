@@ -75,7 +75,7 @@ def main():
         executable,
         [
             executable,
-            str(directory / "serve" / "server.py"),
+            str(ROOT / "qwen3.8-flash-next" / "trace_server.py"),
             "--engine",
             "strata",
             "--config",
@@ -84,6 +84,7 @@ def main():
             args.host,
             "--port",
             str(args.port),
+            "--api-monitor",
         ],
     )
 

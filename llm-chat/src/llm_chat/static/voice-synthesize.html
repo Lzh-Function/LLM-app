@@ -69,6 +69,7 @@ small { opacity:.75; } #notice,#runtime { min-height:24px; } #notice { white-spa
   <details><summary>手持ちのWAVを登録</summary><form id="importForm">
     <label>表示名<input id="importName" type="text" maxlength="80" required></label>
     <label>参照WAV<input id="importFile" type="file" accept="audio/wav,.wav" required></label>
+    <small>PCM WAV・256 MiBまで（保存後32 MiB以下）。120秒を超える音声は先頭120秒を保存します。補助参照は合計120秒に収まる分を保存します。</small>
     <label>読み上げ内容（Qwenのクローン用・任意）<textarea id="importTranscript" rows="2" maxlength="6000"></textarea></label>
     <label>出典・利用条件<input id="importSource" type="text" maxlength="1000"></label>
     <button type="submit">声ライブラリに登録</button>
@@ -157,6 +158,7 @@ function renderLibrary() {
     const el=document.createElement('article'); el.className='card';
     el.innerHTML=`<b>${esc(item.name)}</b> · ${item.kind==='voice'?'登録済み':'候補'} · ${item.references.reduce((n,r)=>n+r.seconds,0).toFixed(1)}秒
       <p>${esc(item.provenance.caption??item.provenance.usage_notes??'取り込み音声')}</p>
+      ${item.references.filter(r=>r.trimmed_from_seconds!=null).map(r=>`<p><small>${r.trimmed_from_seconds.toFixed(1)}秒の参照から先頭${r.seconds.toFixed(1)}秒を保存しました。</small></p>`).join('')}
       <audio controls preload="none" src="/api/voice/library/${item.id}/audio"></audio>
       <div class="row"><button data-favorite>${item.favorite?'★':'☆'} お気に入り</button><button data-use>${item.kind==='voice'?'この声で合成':'この声を登録'}</button><a href="/api/voice/library/${item.id}/audio">WAV保存</a><a href="/api/voice/library/${item.id}/metadata" target="_blank" rel="noopener">生成条件・SHA256</a><button data-delete>削除</button></div>
       <div class="row"><input data-name type="text" maxlength="80" value="${esc(item.name)}" aria-label="声の名前"><button data-rename>名前を保存</button></div>
@@ -166,7 +168,7 @@ function renderLibrary() {
     el.querySelector('[data-rename]').onclick=()=>action(()=>update({name:el.querySelector('[data-name]').value.trim()}));
     el.querySelector('[data-use]').onclick=()=>action(async()=>{if(item.kind!=='voice') await update({register:true});$('synthesisVoice').value=item.id;$('synthesisSource').value='library';updateSource();showPage('production');$('synthesisText').focus();$('notice').textContent='合成する声を選びました。';});
     el.querySelector('[data-delete]').onclick=()=>{if(confirm(`「${item.name}」を削除しますか？`)) action(async()=>{await api(`/api/voice/library/${item.id}`,{method:'DELETE'});await library();$('notice').textContent='削除しました。';});};
-    el.querySelector('[data-append]')?.addEventListener('click',()=>action(async()=>{const file=el.querySelector('[data-file]').files[0];if(!file||!el.querySelector('[data-same]').checked) throw new Error('同じ話者のWAVを選んで確認してください');const form=new FormData();form.append('file',file);form.append('same_speaker','true');await api(`/api/voice/library/${item.id}/references`,{method:'POST',body:form});await library();$('notice').textContent='補助参照を追加しました。';}));
+    el.querySelector('[data-append]')?.addEventListener('click',()=>action(async()=>{const file=el.querySelector('[data-file]').files[0];if(!file||!el.querySelector('[data-same]').checked) throw new Error('同じ話者のWAVを選んで確認してください');const form=new FormData();form.append('file',file);form.append('same_speaker','true');const saved=await api(`/api/voice/library/${item.id}/references`,{method:'POST',body:form});await library();$('notice').textContent='補助参照を追加しました。'+trimNotice(saved.references.at(-1));}));
     $('library').append(el);
   }
 }
@@ -245,7 +247,10 @@ async function productionOptions() {
   $('synthesisVoiceCaption').value=data.default_voice_caption;
   for(const preset of data.presets) $('synthesisPreset').add(new Option(preset.name,preset.id));
 }
-$('importForm').onsubmit=e=>{e.preventDefault();action(async()=>{const body=new FormData();body.append('file',$('importFile').files[0]);body.append('name',$('importName').value.trim());body.append('source',$('importSource').value.trim());body.append('transcript',$('importTranscript').value.trim());await api('/api/voice/library/import',{method:'POST',body});await library();$('notice').textContent='声を登録しました。';});};
+function trimNotice(ref) {
+  return ref.trimmed_from_seconds==null?'':`${ref.trimmed_from_seconds.toFixed(1)}秒の参照から先頭${ref.seconds.toFixed(1)}秒を保存しました。`;
+}
+$('importForm').onsubmit=e=>{e.preventDefault();action(async()=>{const body=new FormData();body.append('file',$('importFile').files[0]);body.append('name',$('importName').value.trim());body.append('source',$('importSource').value.trim());body.append('transcript',$('importTranscript').value.trim());const saved=await api('/api/voice/library/import',{method:'POST',body});await library();$('notice').textContent='声を登録しました。'+trimNotice(saved.references[0])+(saved.provenance.source_text?'カット前の読み上げ文章は自動では使いません。Qwenで文章を使う場合は、保存された音声に合う文章を合成画面で入力してください。':'');});};
 $('favoritesOnly').onchange=renderLibrary;
 $('refreshLibrary').onclick=()=>action(async()=>{await library();await outputs();$('notice').textContent='一覧を更新しました。';});
 refreshRuntime(); productionOptions().catch(e=>$('notice').textContent=e.message); outputs().catch(e=>$('notice').textContent=e.message); updateSource(); engineControls();

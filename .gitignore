@@ -37,6 +37,7 @@ models/
 
 # Local conversations, recordings, and logs
 /llm-chat/history/
+/qwen3.8-flash-next/codex-traces/
 /docs/tmp_*
 *.log
 *.wav

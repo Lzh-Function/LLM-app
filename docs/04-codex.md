@@ -87,6 +87,7 @@ GPU音声がONの間は起動を拒否する。Codexサーバー稼働中はllm-
 既定ポートを変える場合は`serve-codex.sh --port <番号>`とCodexの`base_url`の両方を揃える。
 
 ログは`qwen3.8-flash-next/server-codex.log`（サーバー）と`strata/strata-codex-sc117-iq3_xxs.log`（エンジン）。
+起動時のターミナル出力も`server-codex.log`へ追記する。Codex用は`STRATA_DEBUG=1`で、API形式への変換前の生成テキストも記録する。
 確認コマンド:
 
 ```bash
@@ -95,6 +96,45 @@ curl -s http://127.0.0.1:8080/v1/status
 codex --strict-config doctor --summary  # 既定のGPT設定の診断
 nvidia-smi --query-gpu=memory.used --format=csv,noheader
 ```
+
+### 入力・思考・応答の確認
+
+`serve-codex.sh`はStrataのAPI監視画面を有効にする。サーバー起動後に
+`http://127.0.0.1:8080/api-monitor`を開き、リクエストを選んでInput・Reasoning・Output・Responseを確認する。
+ポートを変更した場合はそのポートへアクセスする。画面は2秒ごとに更新し、直近100件をメモリに保持する。
+各欄262144文字までで、サーバーを停止すると画面の履歴は消える。
+
+全文はリポジトリ内のラッパー`qwen3.8-flash-next/trace_server.py`が別途保存する。Strataの配布コードには変更を加えない。
+
+```bash
+# 入力・思考・回答・ツール呼び出しを生成中から追う
+bash /workspace/LLM/qwen3.8-flash-next/watch-codex.sh
+```
+
+```text
+qwen3.8-flash-next/codex-traces/
+  live.log                         入力・思考・回答・ツール呼び出しの時系列ログ
+  latest/                          最新のサーバー起動分へのリンク
+  <UTC日時>-<PID>/<リクエストID>/
+    request.body                   受信したリクエスト本文の元バイト列
+    request.json                   入力、履歴、指示、ツール定義、生成設定の全文
+    reasoning.txt                  モデルが出力した思考テキスト
+    output.txt                     回答テキスト
+    tools.jsonl                    ツール呼び出しと引数
+    events.jsonl                   生成イベントと記録時刻
+    response.http                  HTTP応答のヘッダーと本文（SSEも含む）
+    response.json                  非ストリーミング応答・エラー応答
+    metadata.json                  状態、HTTPコード、使用トークン、時刻
+```
+
+保存ファイルには文字数制限・100件制限・自動削除を設けない。入力がAPI側で拒否された場合も受信本文を保存する。
+再起動すると新しい日時のディレクトリを作り、過去のファイルを保持する。保存先を変える場合は起動と監視の両方で`CODEX_TRACE_DIR`を指定する。
+ファイルは所有者のみ読み書きできる権限で作成し、Gitの追跡から除外する。ログへの書き込みが失敗してもAPI応答を継続し、標準エラーと`metadata.json`の`trace_failed`に記録する。
+
+ツール実行はCodex側で行われるため、その結果は次のAPIリクエストに含まれた範囲を`request.json`で確認する。
+Codexが短縮したツール出力や、モデルが出力しない内部計算過程は、このサーバーでは取得できない。
+Qwenのプロファイルは`show_raw_agent_reasoning = true`も設定済みで、モデルが返した思考はCodexの端末でも表示される。
+この設定の意味は[公式OpenAI設定リファレンス](https://learn.chatgpt.com/docs/config-file/config-reference)を参照。
 
 ## 4. コンテキストとメモリ
 

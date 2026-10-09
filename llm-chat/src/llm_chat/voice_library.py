@@ -18,6 +18,7 @@ from fastapi import HTTPException
 
 IDENTIFIER = re.compile(r"^[a-f0-9]{32}$")
 MAX_WAV_BYTES = 32 * 1024 * 1024
+MAX_REFERENCE_UPLOAD_BYTES = 256 * 1024 * 1024
 
 
 def serialized_mutation(method):
@@ -30,13 +31,17 @@ def serialized_mutation(method):
     return wrapped
 
 
-def wav_info(data: bytes, *, max_seconds: int = 120, max_bytes: int = MAX_WAV_BYTES) -> dict:
+def wav_info(
+    data: bytes, *, max_seconds: float | None = 120, max_bytes: int = MAX_WAV_BYTES
+) -> dict:
     if not data or len(data) > max_bytes:
         raise HTTPException(422, f"WAVは{max_bytes // (1024 * 1024)} MiB以下にしてください")
     try:
         with wave.open(io.BytesIO(data)) as audio:
             frames, rate = audio.getnframes(), audio.getframerate()
-            if rate <= 0 or not 0.2 <= frames / rate <= max_seconds:
+            if rate <= 0 or frames / rate < 0.2 or (
+                max_seconds is not None and frames / rate > max_seconds
+            ):
                 raise ValueError("duration")
             if audio.getnchannels() not in (1, 2) or audio.getsampwidth() not in (
                 1,
@@ -57,7 +62,26 @@ def wav_info(data: bytes, *, max_seconds: int = 120, max_bytes: int = MAX_WAV_BY
                 "bytes": len(data),
             }
     except (wave.Error, EOFError, ValueError) as exc:
-        raise HTTPException(422, f"0.2～{max_seconds}秒のPCM WAVを指定してください") from exc
+        duration = f"0.2～{max_seconds}秒" if max_seconds is not None else "0.2秒以上"
+        raise HTTPException(422, f"{duration}のPCM WAVを指定してください") from exc
+
+
+def trim_reference_wav(data: bytes, *, max_seconds: float = 120) -> tuple[bytes, dict]:
+    source = wav_info(data, max_seconds=None, max_bytes=MAX_REFERENCE_UPLOAD_BYTES)
+    if max_seconds < 0.2:
+        raise HTTPException(422, "参照は合計120秒までです。既存の参照を削除してから追加してください")
+    if source["seconds"] <= max_seconds:
+        return data, wav_info(data)
+    buffer = io.BytesIO()
+    with wave.open(io.BytesIO(data)) as audio:
+        frames = audio.readframes(int(max_seconds * audio.getframerate()))
+        with wave.open(buffer, "wb") as output:
+            output.setparams(audio.getparams())
+            output.writeframes(frames)
+    trimmed = buffer.getvalue()
+    info = wav_info(trimmed)
+    info.update(trimmed_from_seconds=source["seconds"], source_sha256=source["sha256"])
+    return trimmed, info
 
 
 class VoiceLibrary:
@@ -96,8 +120,17 @@ class VoiceLibrary:
         return item
 
     @serialized_mutation
-    def create(self, data: bytes, *, name: str, kind: str, provenance: dict) -> dict:
-        info = wav_info(data)
+    def create(
+        self, data: bytes, *, name: str, kind: str, provenance: dict,
+        trim_reference: bool = False,
+    ) -> dict:
+        if trim_reference:
+            data, info = trim_reference_wav(data)
+        else:
+            info = wav_info(data)
+        if "trimmed_from_seconds" in info and provenance.get("text"):
+            # A full-recording transcript no longer matches the cropped waveform.
+            provenance = {**provenance, "source_text": provenance["text"], "text": ""}
         identifier = uuid.uuid4().hex
         directory = self.directory(identifier)
         directory.mkdir(parents=True)
@@ -132,12 +165,18 @@ class VoiceLibrary:
         return self.save(item)
 
     @serialized_mutation
-    def append_reference(self, identifier: str, data: bytes) -> dict:
+    def append_reference(
+        self, identifier: str, data: bytes, *, trim_reference: bool = False
+    ) -> dict:
         item = self.get(identifier)
         if item["kind"] != "voice":
             raise HTTPException(409, "先に声を登録してください")
-        info = wav_info(data)
-        if sum(ref["seconds"] for ref in item["references"]) + info["seconds"] > 120:
+        used_seconds = sum(ref["seconds"] for ref in item["references"])
+        if trim_reference:
+            data, info = trim_reference_wav(data, max_seconds=120 - used_seconds)
+        else:
+            info = wav_info(data)
+        if used_seconds + info["seconds"] > 120:
             raise HTTPException(422, "同じ話者の参照は合計120秒以下にしてください")
         filename = f"reference-{uuid.uuid4().hex}.wav"
         path = self.directory(identifier) / filename
