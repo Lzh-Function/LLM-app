@@ -41,6 +41,8 @@ models/
 :memory:.ses
 /llm-chat/history/
 /qwen3.8-flash-next/codex-traces/
+/qwen3.5-9b/codex-traces/
+/ternary-bonsai-2-27b-abliterated/codex-traces/
 /docs/tmp_*
 *.log
 *.wav

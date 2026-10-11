@@ -2,7 +2,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["tomlkit>=0.13,<1"]
 # ///
-"""Install an optional Qwen profile and migrate the former global Qwen defaults."""
+"""Install local Flash Next, Qwen3.5-9B and Bonsai profiles; preserve GPT defaults."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +18,10 @@ import tomlkit
 
 SOURCE = Path(__file__).resolve().parent
 MODEL = "qwen3.8-flash-next-sc117-abliterated-iq3_xxs"
+PROFILES = (("flash-next", "models.json", "flash-next-models.json"),
+            ("qwen", "models.json", "flash-next-models.json"),
+            ("qwen-9b", "qwen-9b-models.json", "qwen-9b-models.json"),
+            ("bonsai", "bonsai-models.json", "bonsai-models.json"))
 LOCAL_KEYS = (
     "model",
     "model_provider",
@@ -47,6 +52,19 @@ def write_atomic(path, content):
     temporary.replace(path)
 
 
+def standard_instructions(model):
+    """Use the installed CLI's bundled GPT instructions without rewriting them."""
+    result = subprocess.run(
+        ["codex", "debug", "models", "--bundled"],
+        check=True, capture_output=True, text=True,
+    )
+    models = json.loads(result.stdout)["models"]
+    standard = next((entry for entry in models if entry["slug"] == model), None)
+    if standard is None:
+        standard = next(entry for entry in models if entry["slug"] == "gpt-6.1-sol")
+    return {key: standard[key] for key in ("base_instructions", "model_messages")}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -64,18 +82,14 @@ def main():
     root.mkdir(parents=True, exist_ok=True)
     path = root / "config.toml"
     old = tomlkit.parse(path.read_text()) if path.is_file() else tomlkit.document()
-    profile_path = root / "qwen.config.toml"
     catalog_path = root / "flash-next-models.json"
-    template = (
-        (SOURCE / "qwen.config.toml")
-        .read_text()
-        .replace(
-            '"@CODEX_HOME@/flash-next-models.json"',
-            json.dumps(str(root / "flash-next-models.json")),
-        )
-    )
     migrate = old.get("model") == MODEL or old.get("model_provider") == "strata"
     previous = previous_gpt_settings(root) if migrate else None
+    instructions = standard_instructions((previous if migrate else old).get("model", "gpt-6.1-sol"))
+    subprocess.run(
+        ["uv", "sync", "--project", str(SOURCE / "search-mcp"), "--locked"],
+        check=True,
+    )
     backup = (
         root
         / "config-backups"
@@ -83,7 +97,10 @@ def main():
     )
     backup.mkdir(parents=True)
     legacy = root / "qwen-local.config.toml"
-    for original in (path, profile_path, catalog_path, legacy):
+    originals = [path, legacy]
+    for name, _, filename in PROFILES:
+        originals.extend((root / f"{name}.config.toml", root / filename))
+    for original in originals:
         if original.is_file():
             shutil.copy2(original, backup / original.name)
     if migrate:
@@ -114,8 +131,31 @@ def main():
         old["sandbox_workspace_write"] = tomlkit.table()
     old["sandbox_workspace_write"]["network_access"] = True
     old.setdefault("sandbox_mode", "workspace-write")
-    catalog = json.loads((SOURCE / "models.json").read_text())
-    catalog["models"][0]["base_instructions"] = (SOURCE / "instructions.md").read_text()
+    for name, source_catalog, filename in PROFILES:
+        profile_path = root / f"{name}.config.toml"
+        template = (SOURCE / f"{name}.config.toml").read_text().replace(
+            f'"@CODEX_HOME@/{filename}"', json.dumps(str(root / filename))
+        ).replace("@ROOT@", str(SOURCE.parent))
+        catalog = json.loads((SOURCE / source_catalog).read_text())
+        catalog["models"][0].update(instructions)
+        # Keep manually added project trust, providers and MCP servers.
+        previous_profile = profile_path
+        if name == "flash-next" and not previous_profile.is_file():
+            # Carry project trust and user MCP settings across the renamed profile.
+            previous_profile = root / "qwen.config.toml"
+        profile = tomlkit.parse(previous_profile.read_text()) if previous_profile.is_file() else tomlkit.document()
+        for key, value in tomlkit.parse(template).items():
+            if isinstance(value, dict) and key in profile:
+                if key in ("model_providers", "mcp_servers"):
+                    for child, settings in value.items():
+                        profile[key].setdefault(child, tomlkit.table()).update(settings)
+                else:
+                    profile[key].update(value)
+            else:
+                profile[key] = value
+        write_atomic(root / filename, json.dumps(catalog, ensure_ascii=False, indent=2) + "\n")
+        write_atomic(profile_path, tomlkit.dumps(profile))
+        print(f"Optional {name}: codex -p {name}; profile: {profile_path}")
     base = tomlkit.dumps(old)
     if migrate:
         base = (
@@ -126,16 +166,18 @@ def main():
             )
             + "\n"
         )
-    write_atomic(catalog_path, json.dumps(catalog, ensure_ascii=False, indent=2) + "\n")
-    write_atomic(profile_path, template)
     write_atomic(path, base)
     if legacy.is_file():
         legacy.unlink()
     print(
         f"Default: {old.get('model', 'Codex built-in default')} ({old.get('model_provider', 'openai')})"
     )
-    print(f"Optional Qwen: codex -p qwen; profile: {profile_path}")
-    print("Qwen context: 131072; auto compact: 98304; sandbox network: enabled")
+    print("All local profiles: installed Codex bundled GPT instructions; local_web_search MCP")
+    print("qwen is a compatibility alias for flash-next; qwen-9b selects Qwen3.5-9B")
+    for name in ("flash-next", "qwen-9b", "bonsai"):
+        profile = tomlkit.parse((root / f"{name}.config.toml").read_text())
+        print(f"{name}: context {profile['model_context_window']}; auto compact "
+              f"{profile['model_auto_compact_token_limit']}; reasoning {profile['model_reasoning_effort']}")
     print(f"Previous configuration: {backup}")
 
 

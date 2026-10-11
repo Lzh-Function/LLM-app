@@ -46,8 +46,9 @@ WSL2 + Dev Container 上で、llama.cpp と Strata を使ってローカル LLM 
 cd /workspace/LLM/llm-chat && uv run llm-chat
 
 # Codex からローカル LLM を使う
-bash /workspace/LLM/qwen3.8-flash-next/serve-codex.sh  # ターミナル 1
-codex -p qwen                                     # ターミナル 2（通常のcodexはGPT）
+bash /workspace/LLM/codex/serve.sh flash-next  # ターミナル 1
+codex -p flash-next                         # ターミナル 2（通常のcodexはGPT）
+# Qwen3.5-9Bはサーバー・プロファイルをともにqwen-9b、Bonsaiはbonsaiへ切り替える
 ```
 
 > VRAM 12GB では **同時に 1 モデルしか載らない**。チャット UI と Codex 用サーバーは同時に使わないこと。
@@ -70,6 +71,9 @@ Hikari07jp 版は v0.1 プレビュー。Bonsai 2 と Flash Next の思考切替
 
 9. [09-qwen-tts.md](09-qwen-tts.md) — Qwen3-TTS 1.7Bの導入、声作成・長文クローン、GPU排他と独立作品保存
 10. [10-storage-audit.md](10-storage-audit.md) — 保存容量の実測、各モデルの役割、断捨離候補と回収容量
+
+11. [11-codex-bonsai.md](11-codex-bonsai.md) — BonsaiのCodex連携、96K設定、速度・メモリ・全文トレースの実測
+12. [12-codex-qwen-9b.md](12-codex-qwen-9b.md) — Qwen3.5-9BのCodex連携、128K設定、コンテキスト比較と実測
 
 ## 今後の拡張候補
 

@@ -1,0 +1,13 @@
+{
+  "context_window": 98304,
+  "cache_type": "q8_0",
+  "kv_offload": true,
+  "gpu_layers": "all",
+  "fit": "off",
+  "ubatch_size": 64,
+  "profile": "bonsai",
+  "model_directory": "ternary-bonsai-2-27b-abliterated",
+  "port": 8081,
+  "backend_port": 8082,
+  "max_context_window": 262144
+}

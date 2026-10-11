@@ -1,0 +1,461 @@
+{
+  "model": "Qwen3.5-9B-UD-Q5_K_XL.gguf",
+  "engine": "llama.cpp b11160 CUDA 12.8",
+  "hardware": {
+    "gpu": "RTX 5070",
+    "vram_mib": 12227,
+    "driver": "591.86"
+  },
+  "selected": {
+    "context_window": 131072,
+    "cache_type": "q8_0",
+    "kv_offload": true,
+    "gpu_layers": "all",
+    "fit": "off",
+    "ubatch_size": 64,
+    "profile": "qwen-9b",
+    "model_directory": "qwen3.5-9b",
+    "port": 8083,
+    "backend_port": 8084,
+    "max_context_window": 262144
+  },
+  "selection_reason": "User reported severe desktop/session stalls with 224K and requested 128K or an intermediate setting. Default is 128K. Larger allocations are not recommended on this machine.",
+  "method": {
+    "gpu_layers": "all",
+    "fit": "off",
+    "flash_attention": true,
+    "ubatch_size": 64,
+    "output_limit": 256,
+    "temperature": 0,
+    "thinking": false,
+    "prompt_unit": "The brown fox walks near the quiet river. ",
+    "prompt_repetitions": [
+      600,
+      2700
+    ],
+    "task": "Write eight numbered points explaining the practical advantages and limitations of Python programming. Use approximately 200 words.",
+    "cache_prompt": false
+  },
+  "cases": [
+    {
+      "context": 262144,
+      "cache_type": "q8_0",
+      "tests": [],
+      "actual_context": 262144,
+      "success": false,
+      "error": "Remote end closed connection without response",
+      "gpu_peak_mib": 11911,
+      "minimum_available_ram_gib": 41.31386947631836,
+      "note": "Model loaded but first generation stalled; interrupted with SIGINT. No completed generation speed measurement.",
+      "source": "/tmp/qwen9-sweet-spot/report.json"
+    },
+    {
+      "context": 196608,
+      "cache_type": "q8_0",
+      "tests": [
+        {
+          "wall_seconds": 5.835490182000285,
+          "usage": {
+            "completion_tokens": 235,
+            "prompt_tokens": 5435,
+            "total_tokens": 5670,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 5435,
+            "prompt_ms": 2399.428,
+            "prompt_per_token_ms": 0.44147709291628334,
+            "prompt_per_second": 2265.123187693067,
+            "predicted_n": 235,
+            "predicted_ms": 3430.067,
+            "predicted_per_token_ms": 14.658405982905983,
+            "predicted_per_second": 68.22024176204138
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to understand, reducing development time for beginners and experts alike.\n2. **Versatility**: It supports diverse domains like web development, data science, AI, and automation within a single language.\n3. **Rich Ecosystem**: Extensive libraries such as NumPy, Pandas, and Django accelerate complex task implementation without reinventing wheels.\n4. **Cross-Platform Compatibility**: Code written on one operating system runs seamlessly on others with minimal modification, ensuring broad accessibility.\n5. **Strong Community Support**: A vast global community provides abundant tutorials, forums, and open-source contributions for troubleshooting and learning.\n6. **Rapid Prototyping**: Its dynamic nature allows developers to quickly build and test ideas, ideal for startups and research projects.\n7. **Performance Limitations**: Being an interpreted language, Python is generally slower than compiled languages like C++ or Rust in computationally intensive tasks.\n8. **Global Interpreter Lock (GIL)**: The GIL restricts true parallel execution of multiple threads in CPU-bound processes, limiting efficiency on multi-core systems for certain workloads."
+        },
+        {
+          "wall_seconds": 14.517944176000128,
+          "usage": {
+            "completion_tokens": 237,
+            "prompt_tokens": 24335,
+            "total_tokens": 24572,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 24335,
+            "prompt_ms": 10725.958,
+            "prompt_per_token_ms": 0.4407626053010068,
+            "prompt_per_second": 2268.7950111309406,
+            "predicted_n": 237,
+            "predicted_ms": 3772.031,
+            "predicted_per_token_ms": 15.98318220338983,
+            "predicted_per_second": 62.56576364298173
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to understand, reducing development time and errors for beginners and experts alike.\n2. **Versatility**: It supports diverse domains like web development, data science, AI, and automation within a single language.\n3. **Rich Ecosystem**: A vast standard library and third-party packages (e.g., NumPy, Django) accelerate project creation without reinventing wheels.\n4. **Community Support**: An active global community ensures extensive documentation, tutorials, and rapid troubleshooting for almost any issue.\n5. **Cross-Platform Compatibility**: Code written on one operating system runs seamlessly on others with minimal modification, enhancing portability.\n6. **Rapid Prototyping**: Its dynamic typing and concise structure allow developers to build functional prototypes quickly before optimizing performance.\n7. **Performance Limitations**: Being an interpreted language, Python is generally slower than compiled languages like C++ or Rust in computationally intensive tasks.\n8. **Global Interpreter Lock (GIL)**: The GIL restricts true parallel execution of multiple threads in CPU-bound processes, limiting efficiency on multi-core systems without complex workarounds."
+        }
+      ],
+      "actual_context": 196608,
+      "success": true,
+      "gpu_peak_mib": 10829,
+      "minimum_available_ram_gib": 41.153568267822266,
+      "source": "/tmp/qwen9-sweet-spot/report.json"
+    },
+    {
+      "context": 131072,
+      "cache_type": "q8_0",
+      "tests": [
+        {
+          "wall_seconds": 5.824658358999841,
+          "usage": {
+            "completion_tokens": 235,
+            "prompt_tokens": 5435,
+            "total_tokens": 5670,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 5435,
+            "prompt_ms": 2408.368,
+            "prompt_per_token_ms": 0.44312198712051515,
+            "prompt_per_second": 2256.714920643357,
+            "predicted_n": 235,
+            "predicted_ms": 3410.374,
+            "predicted_per_token_ms": 14.574247863247862,
+            "predicted_per_second": 68.61417545407043
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to understand, reducing development time for beginners and experts alike.\n2. **Versatility**: It supports diverse domains like web development, data science, AI, and automation within a single language.\n3. **Rich Ecosystem**: Extensive libraries such as NumPy, Pandas, and Django accelerate complex task implementation without reinventing wheels.\n4. **Cross-Platform Compatibility**: Code written on one operating system runs seamlessly on others with minimal modification, ensuring broad accessibility.\n5. **Strong Community Support**: A vast global community provides abundant tutorials, forums, and open-source contributions for troubleshooting and learning.\n6. **Rapid Prototyping**: Its dynamic nature allows developers to quickly build and test ideas, ideal for startups and research projects.\n7. **Performance Limitations**: Being an interpreted language, Python is generally slower than compiled languages like C++ or Rust in computationally intensive tasks.\n8. **Global Interpreter Lock (GIL)**: The GIL restricts true parallel execution of multiple threads in CPU-bound processes, limiting efficiency on multi-core systems for certain workloads."
+        },
+        {
+          "wall_seconds": 14.15820795199943,
+          "usage": {
+            "completion_tokens": 237,
+            "prompt_tokens": 24335,
+            "total_tokens": 24572,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 24335,
+            "prompt_ms": 10480.95,
+            "prompt_per_token_ms": 0.4306944729813027,
+            "prompt_per_second": 2321.8315133647234,
+            "predicted_n": 237,
+            "predicted_ms": 3658.067,
+            "predicted_per_token_ms": 15.500283898305085,
+            "predicted_per_second": 64.5149473752121
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to understand, reducing development time and errors for beginners and experts alike.\n2. **Versatility**: It supports diverse domains like web development, data science, AI, and automation within a single language.\n3. **Rich Ecosystem**: A vast standard library and third-party packages (e.g., NumPy, Django) accelerate project creation without reinventing wheels.\n4. **Community Support**: An active global community ensures extensive documentation, tutorials, and rapid troubleshooting for almost any issue.\n5. **Cross-Platform Compatibility**: Code written on one operating system runs seamlessly on others with minimal modification, enhancing portability.\n6. **Rapid Prototyping**: Its dynamic typing and concise structure allow developers to build functional prototypes quickly before optimizing performance.\n7. **Performance Limitations**: Being an interpreted language, Python is generally slower than compiled languages like C++ or Rust in computationally intensive tasks.\n8. **Global Interpreter Lock (GIL)**: The GIL restricts true parallel execution of multiple threads in CPU-bound processes, limiting efficiency on multi-core systems without complex workarounds."
+        }
+      ],
+      "actual_context": 131072,
+      "success": true,
+      "gpu_peak_mib": 9491,
+      "minimum_available_ram_gib": 41.13315200805664,
+      "source": "/tmp/qwen9-sweet-spot/report.json"
+    },
+    {
+      "context": 65536,
+      "cache_type": "q8_0",
+      "tests": [
+        {
+          "wall_seconds": 5.84829285899923,
+          "usage": {
+            "completion_tokens": 235,
+            "prompt_tokens": 5435,
+            "total_tokens": 5670,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 5435,
+            "prompt_ms": 2338.984,
+            "prompt_per_token_ms": 0.43035584176632935,
+            "prompt_per_second": 2323.6584773559803,
+            "predicted_n": 235,
+            "predicted_ms": 3502.974,
+            "predicted_per_token_ms": 14.96997435897436,
+            "predicted_per_second": 66.80038161859038
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to understand, reducing development time for beginners and experts alike.\n2. **Versatility**: It supports diverse domains like web development, data science, AI, and automation within a single language.\n3. **Rich Ecosystem**: Extensive libraries such as NumPy, Pandas, and Django accelerate complex task implementation without reinventing wheels.\n4. **Cross-Platform Compatibility**: Code written on one operating system runs seamlessly on others with minimal modification, ensuring broad accessibility.\n5. **Strong Community Support**: A vast global community provides abundant tutorials, forums, and open-source contributions for troubleshooting and learning.\n6. **Rapid Prototyping**: Its dynamic nature allows developers to quickly build and test ideas, ideal for startups and research projects.\n7. **Performance Limitations**: Being an interpreted language, Python is generally slower than compiled languages like C++ or Rust in computationally intensive tasks.\n8. **Global Interpreter Lock (GIL)**: The GIL restricts true parallel execution of multiple threads in CPU-bound processes, limiting efficiency on multi-core systems for certain workloads."
+        },
+        {
+          "wall_seconds": 14.226654809999673,
+          "usage": {
+            "completion_tokens": 237,
+            "prompt_tokens": 24335,
+            "total_tokens": 24572,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 24335,
+            "prompt_ms": 10461.283,
+            "prompt_per_token_ms": 0.4298862954592151,
+            "prompt_per_second": 2326.19650954859,
+            "predicted_n": 237,
+            "predicted_ms": 3746.941,
+            "predicted_per_token_ms": 15.876868644067796,
+            "predicted_per_second": 62.98471206245308
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to understand, reducing development time and errors for beginners and experts alike.\n2. **Versatility**: It supports diverse domains like web development, data science, AI, and automation within a single language.\n3. **Rich Ecosystem**: A vast standard library and third-party packages (e.g., NumPy, Django) accelerate project creation without reinventing wheels.\n4. **Community Support**: An active global community ensures extensive documentation, tutorials, and rapid troubleshooting for almost any issue.\n5. **Cross-Platform Compatibility**: Code written on one operating system runs seamlessly on others with minimal modification, enhancing portability.\n6. **Rapid Prototyping**: Its dynamic typing and concise structure allow developers to build functional prototypes quickly before optimizing performance.\n7. **Performance Limitations**: Being an interpreted language, Python is generally slower than compiled languages like C++ or Rust in computationally intensive tasks.\n8. **Global Interpreter Lock (GIL)**: The GIL restricts true parallel execution of multiple threads in CPU-bound processes, limiting efficiency on multi-core systems without complex workarounds."
+        }
+      ],
+      "actual_context": 65536,
+      "success": true,
+      "gpu_peak_mib": 8241,
+      "minimum_available_ram_gib": 41.228416442871094,
+      "source": "/tmp/qwen9-sweet-spot/report.json"
+    },
+    {
+      "context": 262144,
+      "cache_type": "q4_0",
+      "tests": [
+        {
+          "wall_seconds": 5.7533370290002495,
+          "usage": {
+            "completion_tokens": 213,
+            "prompt_tokens": 5435,
+            "total_tokens": 5648,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 5435,
+            "prompt_ms": 2365.059,
+            "prompt_per_token_ms": 0.43515344986200555,
+            "prompt_per_second": 2298.039922048456,
+            "predicted_n": 213,
+            "predicted_ms": 3382.01,
+            "predicted_per_token_ms": 15.952877358490568,
+            "predicted_per_second": 62.684616544599216
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to read and maintain, reducing development time significantly.\n2. **Versatility**: It supports diverse domains like web development, data science, AI, and automation within a single language.\n3. **Large Ecosystem**: Access to extensive libraries such as NumPy, Pandas, and Django accelerates complex task implementation.\n4. **Community Support**: A vast global community ensures abundant documentation, tutorials, and rapid problem-solving assistance.\n5. **Cross-Platform Compatibility**: Code written on one operating system runs seamlessly on others without modification.\n6. **Beginner-Friendly**: Its simple grammar lowers the learning curve for new programmers entering the field.\n7. **Slower Execution**: Being interpreted rather than compiled, Python is generally slower than languages like C++ or Java in performance-critical tasks.\n8. **Global Interpreter Lock (GIL)**: This limitation restricts true multi-threading in CPU-bound applications, hindering parallel processing efficiency on single-core systems."
+        },
+        {
+          "wall_seconds": 16.16766082199956,
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 24335,
+            "total_tokens": 24591,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 24335,
+            "prompt_ms": 10834.325,
+            "prompt_per_token_ms": 0.4452157386480378,
+            "prompt_per_second": 2246.102087578137,
+            "predicted_n": 256,
+            "predicted_ms": 5312.82,
+            "predicted_per_token_ms": 20.834588235294117,
+            "predicted_per_second": 47.99710888002982
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to read and maintain, reducing development time significantly compared to languages with verbose structures.\n2. **Versatility**: It serves as a universal tool for web development, data science, artificial intelligence, automation, and scientific computing within a single ecosystem.\n3. **Rapid Prototyping**: Developers can quickly build functional prototypes due to its dynamic typing and extensive standard library, accelerating the testing phase.\n4. **Strong Community Support**: A vast global community ensures abundant free resources, tutorials, and third-party packages available via PyPI for almost any task.\n5. **Cross-Platform Compatibility**: Python runs seamlessly on Windows, macOS, Linux, and various embedded systems without requiring recompilation for different environments.\n6. **Integration Capabilities**: It integrates effortlessly with other languages like C, C++, and Java, allowing developers to leverage existing legacy codebases or high-performance libraries.\n7. **Beginner-Friendly**: The gentle learning curve attracts new programmers, making it an ideal first language for teaching fundamental programming concepts effectively.\n8. **Performance Limitations**: While excellent for logic, Python is slower than compiled languages like C++ due to its interpreted nature and dynamic features, which can hinder real-time"
+        }
+      ],
+      "actual_context": 262144,
+      "success": true,
+      "gpu_peak_mib": 10115,
+      "minimum_available_ram_gib": 41.24348449707031,
+      "source": "/tmp/qwen9-boundary/report.json"
+    },
+    {
+      "context": 229376,
+      "cache_type": "q8_0",
+      "tests": [
+        {
+          "wall_seconds": 5.916689527000017,
+          "usage": {
+            "completion_tokens": 235,
+            "prompt_tokens": 5435,
+            "total_tokens": 5670,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 5435,
+            "prompt_ms": 2373.533,
+            "prompt_per_token_ms": 0.43671260349586016,
+            "prompt_per_second": 2289.8354478324086,
+            "predicted_n": 235,
+            "predicted_ms": 3537.018,
+            "predicted_per_token_ms": 15.115461538461538,
+            "predicted_per_second": 66.15742413524613
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to understand, reducing development time for beginners and experts alike.\n2. **Versatility**: It supports diverse domains like web development, data science, AI, and automation within a single language.\n3. **Rich Ecosystem**: Extensive libraries such as NumPy, Pandas, and Django accelerate complex task implementation without reinventing wheels.\n4. **Cross-Platform Compatibility**: Code written on one operating system runs seamlessly on others with minimal modification, ensuring broad accessibility.\n5. **Strong Community Support**: A vast global community provides abundant tutorials, forums, and open-source contributions for troubleshooting and learning.\n6. **Rapid Prototyping**: Its dynamic nature allows developers to quickly build and test ideas, ideal for startups and research projects.\n7. **Performance Limitations**: Being an interpreted language, Python is generally slower than compiled languages like C++ or Rust in computationally intensive tasks.\n8. **Global Interpreter Lock (GIL)**: The GIL restricts true parallel execution of multiple threads in CPU-bound processes, limiting efficiency on multi-core systems for certain workloads."
+        },
+        {
+          "wall_seconds": 14.654857080000511,
+          "usage": {
+            "completion_tokens": 237,
+            "prompt_tokens": 24335,
+            "total_tokens": 24572,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 24335,
+            "prompt_ms": 10853.922,
+            "prompt_per_token_ms": 0.4460210396548182,
+            "prompt_per_second": 2242.046699801233,
+            "predicted_n": 237,
+            "predicted_ms": 3781.464,
+            "predicted_per_token_ms": 16.02315254237288,
+            "predicted_per_second": 62.40969106145133
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to understand, reducing development time and errors for beginners and experts alike.\n2. **Versatility**: It supports diverse domains like web development, data science, AI, and automation within a single language.\n3. **Rich Ecosystem**: A vast standard library and third-party packages (e.g., NumPy, Django) accelerate project creation without reinventing wheels.\n4. **Community Support**: An active global community ensures extensive documentation, tutorials, and rapid troubleshooting for almost any issue.\n5. **Cross-Platform Compatibility**: Code written on one operating system runs seamlessly on others with minimal modification, enhancing portability.\n6. **Rapid Prototyping**: Its dynamic typing and concise structure allow developers to build functional prototypes quickly before optimizing performance.\n7. **Performance Limitations**: Being an interpreted language, Python is generally slower than compiled languages like C++ or Rust in computationally intensive tasks.\n8. **Global Interpreter Lock (GIL)**: The GIL restricts true parallel execution of multiple threads in CPU-bound processes, limiting efficiency on multi-core systems without complex workarounds."
+        }
+      ],
+      "actual_context": 229376,
+      "success": true,
+      "gpu_peak_mib": 11496,
+      "minimum_available_ram_gib": 41.21971893310547,
+      "note": "Throughput test completed, but user reported severe machine responsiveness degradation. Do not use as default.",
+      "source": "/tmp/qwen9-boundary/report.json"
+    },
+    {
+      "context": 245760,
+      "cache_type": "q8_0",
+      "tests": [],
+      "actual_context": 245760,
+      "success": false,
+      "error": "Remote end closed connection without response",
+      "gpu_peak_mib": 11772,
+      "minimum_available_ram_gib": 41.1286735534668,
+      "note": "Model loaded but first generation stalled; interrupted with SIGINT. No completed generation speed measurement.",
+      "source": "/tmp/qwen9-boundary/report.json"
+    },
+    {
+      "context": 262144,
+      "cache_type_k": "q8_0",
+      "cache_type_v": "q4_0",
+      "tests": [
+        {
+          "wall_seconds": 5.903301674999966,
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 5435,
+            "total_tokens": 5691,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 5435,
+            "prompt_ms": 2262.149,
+            "prompt_per_token_ms": 0.41621876724931,
+            "prompt_per_second": 2402.5826769147393,
+            "predicted_n": 256,
+            "predicted_ms": 3635.02,
+            "predicted_per_token_ms": 14.254980392156863,
+            "predicted_per_second": 70.15092076522275
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to read and maintain, reducing development time significantly compared to languages with verbose structures.\n2. **Versatility**: It serves as a universal tool for web development, data science, artificial intelligence, automation, and scientific computing within a single ecosystem.\n3. **Rapid Prototyping**: Developers can quickly build functional prototypes due to its dynamic typing and extensive standard library, accelerating the testing phase.\n4. **Strong Community Support**: A vast global community ensures abundant free resources, tutorials, and third-party packages available via PyPI for almost any task.\n5. **Cross-Platform Compatibility**: Python runs seamlessly on Windows, macOS, Linux, and various embedded systems without requiring recompilation for different environments.\n6. **Integration Capabilities**: It integrates effortlessly with other languages like C, C++, and Java, allowing developers to leverage existing legacy codebases or high-performance libraries.\n7. **Beginner-Friendly Nature**: Its English-like keywords and indentation-based structure lower the learning curve, making it an ideal first language for new programmers.\n8. **Performance Limitations**: While excellent for logic, Python is generally slower than compiled languages like C++ due to its interpreted nature, which can hinder real"
+        },
+        {
+          "wall_seconds": 14.351028199999746,
+          "usage": {
+            "completion_tokens": 256,
+            "prompt_tokens": 24335,
+            "total_tokens": 24591,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 24335,
+            "prompt_ms": 9996.151,
+            "prompt_per_token_ms": 0.4107725909184302,
+            "prompt_per_second": 2434.4370148069993,
+            "predicted_n": 256,
+            "predicted_ms": 4336.356,
+            "predicted_per_token_ms": 17.005317647058824,
+            "predicted_per_second": 58.805135002753474
+          },
+          "answer": "1. **Readability**: Python's clean syntax makes code easy to read and maintain, reducing development time significantly compared to languages with verbose structures.\n2. **Versatility**: It serves as a universal tool for web development, data science, automation, and artificial intelligence, allowing developers to switch domains easily.\n3. **Extensive Libraries**: A vast ecosystem of pre-built packages like NumPy and Pandas accelerates complex tasks such as machine learning and data analysis without reinventing the wheel.\n4. **Rapid Prototyping**: The dynamic typing and interpreted nature enable quick iteration and testing, ideal for startups and agile development cycles.\n5. **Strong Community Support**: A massive global community ensures abundant documentation, tutorials, and third-party libraries are readily available for troubleshooting.\n6. **Cross-Platform Compatibility**: Python runs seamlessly on Windows, macOS, and Linux, ensuring code portability across different operating systems without modification.\n7. **Performance Limitations**: Being an interpreted language, it is generally slower than compiled languages like C++ or Rust, making it less suitable for high-frequency trading or heavy real-time processing.\n8. **Global Interpreter Lock (GIL)**: The GIL restricts true parallel execution of multiple threads in CPU-bound tasks,"
+        }
+      ],
+      "actual_context": 262144,
+      "success": true,
+      "gpu_peak_mib": 11129,
+      "minimum_available_ram_gib": 41.23371124267578,
+      "source": "/tmp/qwen9-mixed/report.json"
+    }
+  ],
+  "verification": {
+    "source": "/tmp/codex-qwen-9b/report.json",
+    "verified": true,
+    "context": 131072,
+    "codex_seconds": 30.00376802699975,
+    "trace_session": "/workspace/LLM/qwen3.5-9b/codex-traces/20261011T131733.542671Z-68911",
+    "long_seconds": 78.69194230300036,
+    "long_content_tokens": 122942,
+    "ports_closed": {
+      "8083": true,
+      "8084": true
+    },
+    "gpu_after_stop": "621 MiB",
+    "gpu_lock_released": true,
+    "remaining_engines": [],
+    "codex_generation_tokens_per_second": [
+      71.71828034931926,
+      71.30166731680404,
+      71.9573293037229,
+      72.94811455490662,
+      71.21355955713835,
+      72.45839098722377,
+      71.49784623252614,
+      71.7793531206668,
+      72.23549476028387
+    ],
+    "long_usage": {
+      "input_tokens": 122954,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 256,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 123210
+    },
+    "long_timings": {
+      "cache_n": 0,
+      "prompt_n": 122954,
+      "prompt_ms": 72561.458,
+      "prompt_per_token_ms": 0.590151259820746,
+      "prompt_per_second": 1694.480835817825,
+      "predicted_n": 256,
+      "predicted_ms": 5285.729,
+      "predicted_per_token_ms": 20.728349019607844,
+      "predicted_per_second": 48.24310894485888
+    },
+    "long_keys_verified": true,
+    "gpu_peak_mib": 9393,
+    "minimum_available_ram_gib": 39.574066162109375
+  }
+}

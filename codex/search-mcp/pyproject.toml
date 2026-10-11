@@ -1,0 +1,11 @@
+[project]
+name = "codex-web-search-mcp"
+version = "0.1.0"
+description = "Web search and page reading tools for the local Qwen Codex profile"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.26,<2",
+    "ddgs>=9.16,<10",
+    "httpx>=0.28,<1",
+    "trafilatura>=2.2,<3",
+]

@@ -1,4 +1,5 @@
-# Optional profile: codex -p qwen. Start serve-codex.sh in another terminal first.
+# Compatibility alias for flash-next; prefer codex -p flash-next.
+# Optional profile: codex -p flash-next. Start serve-codex.sh in another terminal first.
 model = "qwen3.8-flash-next-sc117-abliterated-iq3_xxs"
 model_provider = "strata"
 model_catalog_json = "@CODEX_HOME@/flash-next-models.json"
@@ -7,7 +8,7 @@ model_auto_compact_token_limit = 98304
 model_reasoning_effort = "high"
 show_raw_agent_reasoning = true
 sandbox_mode = "workspace-write"
-web_search = "disabled"
+web_search = "live"
 
 [sandbox_workspace_write]
 network_access = true
@@ -20,7 +21,16 @@ requires_openai_auth = false
 supports_websockets = false
 stream_idle_timeout_ms = 600000
 
-# Keep the local prompt focused on coding tools.
+# Optional local-provider feature settings.
 [features]
 apps = false
 multi_agent = false
+
+[mcp_servers.local_web_search]
+command = "@ROOT@/codex/search-mcp/.venv/bin/python"
+args = ["@ROOT@/codex/search-mcp/server.py"]
+startup_timeout_sec = 30
+tool_timeout_sec = 45
+enabled = true
+required = true
+enabled_tools = ["web_search", "fetch_page"]

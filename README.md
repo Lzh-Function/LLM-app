@@ -21,7 +21,7 @@ WSL2 + Dev Container 上で、llama.cpp・Prism ML・Strata を使って LLM を
 | **画像・ウェブ検索** · チャット内 | 画像の添付・貼り付け、必要に応じた検索とページ取得、出典付きの回答 | [画像添付](llm-chat/README.md#画像添付) / [ウェブ検索](docs/03-web-search.md) |
 | **音声会話** · チャット内 | マイク録音の文字起こし、AivisSpeech / VOICEVOX / Irodori による読み上げ、声ライブラリ | [音声チャット](docs/06-voice-chat.md) / [Irodori](docs/08-irodori-tts.md) |
 | **音声作品制作** · `localhost:5080` | 声の説明や参照 WAV から長文合成、複数話者の原稿、作品の保存・再制作・ZIP 出力 | [voice-synthesize](voice-synthesize/README.md) |
-| **ローカル Codex** · ターミナル | Flash Next を専用プロファイルで利用、API 監視画面とリクエスト・応答の記録 | [Codex 連携](codex/README.md) |
+| **ローカル Codex** · ターミナル | Flash Next / Qwen3.5-9B / Bonsai 2 を専用プロファイルで利用、検索 MCP と入出力の全文記録 | [Codex 連携](codex/README.md) |
 
 ## 使い始める
 
@@ -86,7 +86,7 @@ GPU 音声の起動時はチャットの LLM をアンロードし、制作中�
 
 ### Codex からローカルモデルを使う
 
-Strata と Flash Next の導入後、初回に専用プロファイルを設定します。
+使うモデルの重みと推論エンジンを導入後、初回に専用プロファイルを設定します。
 
 ```bash
 cd /workspace/LLM
@@ -96,16 +96,18 @@ uv run codex/setup.py
 ```bash
 # ターミナル 1: ローカルモデルのサーバー
 cd /workspace/LLM
-bash qwen3.8-flash-next/serve-codex.sh
+bash codex/serve.sh flash-next
 ```
 
 ```bash
 # ターミナル 2: Codex に作業させたいディレクトリで実行
-codex -p qwen
+codex -p flash-next
 ```
 
-`codex -p qwen` はローカルの Flash Next を使い、通常の `codex` は GPT を使います。
+`codex -p flash-next` はローカルの Flash Next を使い、通常の `codex` は GPT を使います。
 **[API 監視画面](http://localhost:8080/api-monitor)** で入力・思考テキスト・応答を確認できます。
+Qwen3.5-9B は `bash codex/serve.sh qwen-9b` と `codex -p qwen-9b` で利用できます。Codex用コンテキストは131,072トークンです。旧 `codex -p qwen` は Flash Next の互換名です。
+Bonsai 2 は `bash codex/serve.sh bonsai` と `codex -p bonsai` で利用できます。Codex用コンテキストは98,304トークンです。
 設定と記録の詳細は [Codex の README](codex/README.md) を参照してください。
 
 ## 現在の LLM
@@ -141,6 +143,8 @@ flowchart LR
     Chat --> Speech["CPU 音声<br/>文字起こし・読み上げ"]
     Studio --> TTS["GPU 音声<br/>Irodori Large / Qwen3-TTS"]
     Codex["Codex CLI"] --> Local["Flash Next / Strata<br/>Responses API :8080"]
+    Codex --> Local9["Qwen3.5-9B / llama.cpp<br/>Responses API :8083"]
+    Codex --> Bonsai["Bonsai 2 / Prism<br/>Responses API :8081"]
 ```
 
 チャットは各ディレクトリの `model.toml` を読み、選んだモデルの `serve.sh` を起動します。
@@ -182,6 +186,8 @@ LLM/
 | Irodori、声ライブラリ、CPU / GPU 合成 | [08 · Irodori-TTS](docs/08-irodori-tts.md) |
 | Qwen の声作成・クローン・長文制作 | [09 · Qwen3-TTS](docs/09-qwen-tts.md) |
 | 保存容量、モデルの役割、整理の実施結果 | [10 · 容量調査](docs/10-storage-audit.md) |
+| BonsaiのCodex連携・96K設定と実測 | [11 · Codex Bonsai](docs/11-codex-bonsai.md) |
+| Qwen3.5-9BのCodex連携・128K設定と実測 | [12 · Codex Qwen3.5-9B](docs/12-codex-qwen-9b.md) |
 
 ## 保存先と Git 管理
 
@@ -193,6 +199,8 @@ LLM/
 | 会話用の声ライブラリ | `llm-chat/voice-library/` | 対象外 |
 | 音声作品（WAV・原稿・設定・参照音声・ZIP） | `voice-synthesize/productions/` | 対象外 |
 | Codex の入力・応答記録 | `qwen3.8-flash-next/codex-traces/` | 対象外 |
+| Qwen3.5-9B Codex の入力・応答記録 | `qwen3.5-9b/codex-traces/` | 対象外 |
+| Bonsai Codex の入力・応答記録 | `ternary-bonsai-2-27b-abliterated/codex-traces/` | 対象外 |
 
 除外ルールは [.gitignore](.gitignore) で管理しています。クローン後は必要な重みとランタイムを各環境で取得し直してください。
 認証情報・会話履歴・音声作品は private リポジトリでもコミットしません。

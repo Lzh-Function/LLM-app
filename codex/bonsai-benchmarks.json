@@ -1,0 +1,298 @@
+{
+  "measured_on": "2026-10-11",
+  "model": "ternary-bonsai-2-27b-abliterated",
+  "model_quantization": "PQ2_0",
+  "engine": "Prism llama.cpp b10735-842b18804",
+  "gpu": "NVIDIA RTX 5070 12GB",
+  "ram_gib": 47,
+  "method": "Repeated English input plus the same Python explanation request; temperature=0, thinking disabled, no prompt cache reuse, output limited to 256 tokens. GPU peaks sampled every 0.5 seconds include desktop usage.",
+  "selected_runtime": {
+    "context_window": 98304,
+    "cache_type": "q8_0",
+    "kv_offload": true,
+    "gpu_layers": "all",
+    "fit": "off",
+    "ubatch_size": 64
+  },
+  "comparisons": [
+    {
+      "context_window": 32768,
+      "cache_k": "q8_0",
+      "cache_v": "q8_0",
+      "kv_placement": "GPU",
+      "ubatch_size": 128,
+      "gpu_peak_mib": 9353,
+      "completed_both_prompts": true,
+      "measurements": [
+        {
+          "input_tokens": 5435,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 1168.0663762583579,
+          "generated_tokens_per_second": 54.46253170039712,
+          "wall_seconds": 9.340752493999844
+        },
+        {
+          "input_tokens": 24335,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 1095.37934019588,
+          "generated_tokens_per_second": 45.71792470741873,
+          "wall_seconds": 27.811534129999927
+        }
+      ]
+    },
+    {
+      "context_window": 65536,
+      "cache_k": "q8_0",
+      "cache_v": "q8_0",
+      "kv_placement": "GPU",
+      "ubatch_size": 128,
+      "gpu_peak_mib": 10744,
+      "completed_both_prompts": true,
+      "measurements": [
+        {
+          "input_tokens": 5435,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 1158.6198545873458,
+          "generated_tokens_per_second": 54.55039033478323,
+          "wall_seconds": 9.371139263999794
+        },
+        {
+          "input_tokens": 24335,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 1082.999844147711,
+          "generated_tokens_per_second": 46.69299174815814,
+          "wall_seconds": 27.949043664999863
+        }
+      ]
+    },
+    {
+      "context_window": 98304,
+      "cache_k": "q4_0",
+      "cache_v": "q4_0",
+      "kv_placement": "GPU",
+      "ubatch_size": 128,
+      "gpu_peak_mib": 10516,
+      "completed_both_prompts": true,
+      "measurements": [
+        {
+          "input_tokens": 5435,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 1141.4045933817015,
+          "generated_tokens_per_second": 45.289098967159894,
+          "wall_seconds": 10.397743639000055
+        },
+        {
+          "input_tokens": 24335,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 1080.7984682374272,
+          "generated_tokens_per_second": 26.613242582524013,
+          "wall_seconds": 32.11638753199986
+        }
+      ]
+    },
+    {
+      "context_window": 131072,
+      "cache_k": "q4_0",
+      "cache_v": "q4_0",
+      "kv_placement": "GPU",
+      "ubatch_size": 128,
+      "gpu_peak_mib": 11278,
+      "completed_both_prompts": true,
+      "measurements": [
+        {
+          "input_tokens": 5435,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 1111.1917557136417,
+          "generated_tokens_per_second": 45.313628953525274,
+          "wall_seconds": 10.524797878999834
+        },
+        {
+          "input_tokens": 24335,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 1093.9121932168543,
+          "generated_tokens_per_second": 26.873184808578085,
+          "wall_seconds": 31.753950069999973
+        }
+      ]
+    },
+    {
+      "context_window": 81920,
+      "cache_k": "q8_0",
+      "cache_v": "q8_0",
+      "kv_placement": "GPU",
+      "ubatch_size": 128,
+      "gpu_peak_mib": 11338,
+      "completed_both_prompts": true,
+      "measurements": [
+        {
+          "input_tokens": 5435,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 1131.383495706467,
+          "generated_tokens_per_second": 54.20961006708599,
+          "wall_seconds": 9.513886371999888
+        },
+        {
+          "input_tokens": 24335,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 1070.5227952069438,
+          "generated_tokens_per_second": 45.666066441440435,
+          "wall_seconds": 28.333784955999818
+        }
+      ]
+    },
+    {
+      "context_window": 98304,
+      "cache_k": "q8_0",
+      "cache_v": "q4_0",
+      "kv_placement": "GPU",
+      "ubatch_size": 128,
+      "gpu_peak_mib": 10857,
+      "completed_both_prompts": false,
+      "measurements": [
+        {
+          "input_tokens": 5435,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 143.36883525549132,
+          "generated_tokens_per_second": 14.382039303237008,
+          "wall_seconds": 55.645865948999926
+        }
+      ]
+    },
+    {
+      "context_window": 98304,
+      "cache_k": "q8_0",
+      "cache_v": "q8_0",
+      "kv_placement": "GPU",
+      "ubatch_size": 128,
+      "gpu_peak_mib": 11712,
+      "completed_both_prompts": true,
+      "measurements": [
+        {
+          "input_tokens": 5435,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 998.8168568676148,
+          "generated_tokens_per_second": 46.901011093836416,
+          "wall_seconds": 10.884194198000841
+        },
+        {
+          "input_tokens": 24335,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 944.883711936543,
+          "generated_tokens_per_second": 40.54004426336911,
+          "wall_seconds": 32.061832518999836
+        }
+      ]
+    },
+    {
+      "context_window": 106496,
+      "cache_k": "q8_0",
+      "cache_v": "q8_0",
+      "kv_placement": "GPU",
+      "ubatch_size": 64,
+      "gpu_peak_mib": 11827,
+      "completed_both_prompts": true,
+      "measurements": [
+        {
+          "input_tokens": 5435,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 893.7466022007051,
+          "generated_tokens_per_second": 44.525883157796585,
+          "wall_seconds": 11.814697687000262
+        },
+        {
+          "input_tokens": 24335,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 819.8412428894311,
+          "generated_tokens_per_second": 38.83009640066325,
+          "wall_seconds": 36.26938802299992
+        }
+      ]
+    },
+    {
+      "context_window": 114688,
+      "cache_k": "q8_0",
+      "cache_v": "q8_0",
+      "kv_placement": "GPU",
+      "ubatch_size": 64,
+      "gpu_peak_mib": 11880,
+      "completed_both_prompts": false,
+      "measurements": [
+        {
+          "input_tokens": 5435,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 204.0097085348766,
+          "generated_tokens_per_second": 15.151250477264389,
+          "wall_seconds": 43.47736960700058
+        }
+      ]
+    },
+    {
+      "context_window": 98304,
+      "cache_k": "q8_0",
+      "cache_v": "q8_0",
+      "kv_placement": "GPU",
+      "ubatch_size": 64,
+      "gpu_peak_mib": 11374,
+      "completed_both_prompts": true,
+      "measurements": [
+        {
+          "input_tokens": 5435,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 954.2616341348604,
+          "generated_tokens_per_second": 55.50272518380653,
+          "wall_seconds": 10.29627961999995
+        },
+        {
+          "input_tokens": 24335,
+          "output_tokens": 256,
+          "cached_tokens": 0,
+          "input_tokens_per_second": 896.3797199309727,
+          "generated_tokens_per_second": 45.54068309953104,
+          "wall_seconds": 32.766827966000164
+        }
+      ]
+    }
+  ],
+  "selected_runtime_verification": {
+    "context_window": 98304,
+    "codex_task_seconds": 48.0066442719999,
+    "codex_generated_tokens_per_second": [
+      49.91225130687185,
+      52.246840595262874,
+      51.76272129064928
+    ],
+    "long_input_tokens": 90074,
+    "long_output_tokens": 256,
+    "long_input_tokens_per_second": 675.600204409677,
+    "long_generated_tokens_per_second": 28.858176998403295,
+    "long_wall_seconds": 142.84468297199965,
+    "begin_middle_end_values_correct": true,
+    "gpu_peak_mib": 11770,
+    "minimum_available_ram_gib": 40.24470138549805,
+    "verified_patch_shell_search_fetch_and_traces": true,
+    "ports_closed": {
+      "8081": true,
+      "8082": true
+    },
+    "gpu_lock_released": true,
+    "remaining_engines": [],
+    "trace_session": "/workspace/LLM/ternary-bonsai-2-27b-abliterated/codex-traces/20261011T125615.799552Z-52980"
+  }
+}

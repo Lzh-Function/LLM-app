@@ -1,34 +1,36 @@
 # 04. Codex CLIとQwen3.8 Flash Next / Strata
 
 Codexの既定モデルは従来のGPT（この環境では`gpt-6.1-sol`）。
-`codex -p qwen`を指定したときだけ、導入済みのSC117版Qwen3.8-Flash-Next GSQ-RCO abliterated IQ3_XXSを利用する。
+Qwen3.5-9Bは`bash codex/serve.sh qwen-9b`と`codex -p qwen-9b`で使う。[設定・実測](12-codex-qwen-9b.md)を参照。
+セットアップはBonsai用の`codex -p bonsai`も導入する。Bonsaiの96K設定と実測は[11-codex-bonsai.md](11-codex-bonsai.md)を参照。
+`codex -p flash-next`を指定したときだけ、導入済みのSC117版Qwen3.8-Flash-Next GSQ-RCO abliterated IQ3_XXSを利用する。
 Strataの`/v1/responses`を使い、ファイル編集・シェル実行・ツール結果を返して続けるエージェント操作に対応する。
 Codex CLI 0.159.2、Strataエンジン0.1.40で確認した。モデル重みの導入手順は[07-strata.md](07-strata.md)。
 
 ## 1. 設定と起動
 
-この環境の`/home/vscode/.codex/qwen.config.toml`は設定済み。
+この環境の`/home/vscode/.codex/flash-next.config.toml`は設定済み。
 通常のGPTは`codex`で起動する。Qwenの導入・再設定と利用は次のとおり。
 
 ```bash
 cd /workspace/LLM
 uv run codex/setup.py
 # ターミナル1: Codex用のローカルサーバー
-bash qwen3.8-flash-next/serve-codex.sh
+bash codex/serve.sh flash-next
 # ターミナル2: 作業ディレクトリでQwenを指定
 cd /path/to/project
-codex -p qwen
+codex -p flash-next
 # 非インタラクティブ
-codex exec -p qwen "指示"
+codex exec -p flash-next "指示"
 ```
 
-旧Qwen3.6 / llama.cpp用の`qwen-local.config.toml`は削除した。新しいプロファイル名は`qwen`。
+旧Qwen3.6 / llama.cpp用の`qwen-local.config.toml`は削除した。Flash Nextのプロファイル名は`flash-next`。旧`qwen`はFlash Nextの互換名として残す。Qwen3.5-9Bは`qwen-9b`で指定する。
 セットアップはQwenのモデル・プロバイダー・専用カタログ・コンテキストを別ファイルに保存する。
 以前のグローバルQwen設定が残っていれば、導入前のバックアップからGPT設定を復元し、プロジェクトの信頼設定や追加したMCP等を保持する。
 再実行しても既定のGPT設定を変更しない。
 以前の設定は`~/.codex/config-backups/flash-next-<日時>/`へ退避する。モデル重みやチャットUIのモデル一覧は削除しない。
 
-設定の元は`codex/qwen.config.toml`、専用モデル情報は`codex/models.json`、基本指示は`codex/instructions.md`。
+設定の元は`codex/flash-next.config.toml`、専用モデル情報は`codex/models.json`。基本指示はセットアップ時に`codex debug models --bundled`でインストール済みCodexの標準GPTモデルから取得し、`base_instructions`と`model_messages`をそのまま専用カタログへ登録する。独自の短縮指示は使わない。
 セットアップは`CODEX_HOME`があればその場所へ、なければ`~/.codex`へ書き込む。
 `flash-next-models.json`にはFlash Next一モデルだけを登録する。CodexがOpenAIモデル用の大きなフォールバック定義を使うことを避け、実際のコンテキスト・推論レベル・ツール形式を指定する。
 
@@ -43,7 +45,7 @@ model_auto_compact_token_limit = 98304
 model_reasoning_effort = "high"
 show_raw_agent_reasoning = true
 sandbox_mode = "workspace-write"
-web_search = "disabled"
+web_search = "live"
 
 [sandbox_workspace_write]
 network_access = true
@@ -67,7 +69,26 @@ Strata側のAPI、namespace/customツール、会話履歴の扱いは[Strata公
 ネット接続のための追加フラグは不要。実際のCodexのシェルからHugging FaceへHTTPSで接続し、取得したJSONの内容を確認済み。
 承認ポリシーはCodexの通常の`on-request`を使う。ネット接続を有効にするためにsandbox全体を無効化する必要はない。
 
-Qwenプロファイルでは、StrataがOpenAIのホストする`web_search`等のツールを実行しないため、その機能は無効。
+Qwenプロファイルの検索設定は`web_search = "live"`。現行StrataはOpenAIのホスト型`web_search`を除外するため、ネット検索は専用の`local_web_search` MCPから行う。
+セットアップは`codex/search-mcp/uv.lock`に従って専用の`.venv`へ依存関係を導入し、QwenプロファイルにMCPを登録する。Codex起動時に自動接続する。APIキーと検索サーバーの手動起動は不要。
+
+- `web_search(query, max_results=5)`：検索結果のタイトル・URL・概要を返す。最大10件、検索処理の待機上限は30秒。
+- `fetch_page(url, max_chars=8000)`：HTTP/HTTPSページの本文を抽出して返す。最大20,000文字。
+
+実装は`codex/search-mcp/server.py`。既存の`llm-chat/src/llm_chat/search/`を再利用する。検索語は検索サービスへ、閲覧URLは対象サイトへ送信される。
+検索する場面・ページ本文の確認・出典URLの引用はMCPの初期化時の`instructions`とツール説明で伝える。Codex標準の基本指示は書き換えない。
+MCPはローカルモデルのQwen・Bonsaiプロファイルに登録し、登録済みの他のMCPやプロジェクトの信頼設定は保持する。
+
+```bash
+codex -p flash-next mcp list
+codex exec -p flash-next "Pythonの公式ドキュメントをネット検索し、ページ本文を確認して出典URLを示して"
+```
+
+2026-10-11の検証で、実際の検索MCPから検索結果とページ本文を取得した。さらにCodex CLIとStrataの模擬モデルを使い、MCPのツール定義・呼び出し・検索結果・ページ本文が3リクエストで往復することを確認した。
+さらに制限された実行環境の外でRTX 5070に実Qwenをロードし、Codexから「Pythonの最新安定版と公開日をネット検索し、公式のリリースページ本文を確認して出典URLを示す」と依頼した。実Qwen自身が検索MCPを選択し、検索1回とページ取得3回が成功した。公式本文にある版番号・公開日と一致する回答を返した。記録は`/tmp/codex-search-real-verify/`の`report.json`、`codex.jsonl`、`answer.txt`、`traces/`に保存した。
+検証終了後、起動したStrataサーバーとエンジンを停止し、8080番ポートの解放・残存プロセスなし・GPUロックの解放を確認した。GPUメモリ使用量はモデルロード時11,597MiB、停止後1,195MiBだった。
+MCPの入力検証と失敗時の扱いは4件、設定の保持と標準指示の登録は3件のテストで確認した。
+
 `curl`やPythonからのネット取得は利用できる。QwenではAppsとmulti-agentも無効にした。
 GPTにはQwen専用のカタログ・コンテキスト・機能制限を適用しない。
 MCPやプラグイン、プロジェクトのAGENTS.md・スキルの設定は個別に追加できる。
@@ -190,7 +211,13 @@ GPUの専門家キャッシュが減るため、速度との交換になる。RA
 128K設定で初回プロンプトは約4Kトークン。3リクエスト合計の入力13431、キャッシュ再利用8955、出力493トークン。
 Codexの診断はエラー0。StrataのResponses APIテスト21件も通過した。
 検証ファイルはこの環境の`/tmp/codex-flash-next-128k-smoke/`、長文テストは`/tmp/strata-codex-context-128k/`に保存した。
-GPTへの復帰後も`codex -p qwen`から同じ操作が通った。プロファイルの検証ファイルは`/tmp/codex-qwen-profile-smoke/`。
+GPTへの復帰後も`codex -p flash-next`から同じ操作が通った。プロファイルの検証ファイルは`/tmp/codex-qwen-profile-smoke/`。
 設定の移行・GPT設定の保持・再実行について`python3 -m unittest discover -s codex -p test_setup.py -v`の3テストが通過した。
 
 この確認は小規模な実行テスト。大きなリポジトリで長時間継続するエージェント作業の品質評価ではない。
+
+### Flash Next起動名の確認（2026-10-11）
+
+`bash codex/serve.sh flash-next`と`codex -p flash-next`で実モデルを起動し、検索MCPと公式ページ本文取得を確認した。
+旧`qwen`は同じFlash Nextモデルの互換プロファイルとして維持する。Qwen3.5-9Bは別の`qwen-9b`プロファイルと8083/8084を使う。
+結果は`/tmp/codex-flash-next-renamed/`。検証後はサーバー・エンジンを停止し、8080の閉鎖とGPUロック解放を確認した。
