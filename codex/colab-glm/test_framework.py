@@ -5,6 +5,8 @@ import http.server
 import importlib.util
 import io
 import json
+import os
+import shlex
 import signal
 import socket
 import subprocess
@@ -107,6 +109,17 @@ class DownloadTests(unittest.TestCase):
         self.path.write_bytes(b'x' * len(PAYLOAD))
         with self.assertRaisesRegex(RuntimeError, 'Existing file fails verification'):
             self.fetch()
+
+    def test_drive_sync_timestamp_change_rechecks_content_without_download(self):
+        self.fetch()
+        timestamp = self.path.stat().st_mtime_ns + 180_000_000_000
+        session.os.utime(self.path, ns=(timestamp, timestamp))
+        with patch.object(remote, 'digest', wraps=remote.digest) as verify:
+            self.fetch()
+            verify.assert_called_once_with(self.path)
+        self.assertEqual(len(Handler.ranges), 1)
+        marker = self.path.with_name('model.gguf.verified.json')
+        self.assertEqual(json.loads(marker.read_text())['mtime_ns'], self.path.stat().st_mtime_ns)
 
     def test_unmounted_drive_refused_before_directory_creation(self):
         destination = Path(self.tmp.name) / 'weights'
@@ -223,6 +236,7 @@ class PreflightTests(unittest.TestCase):
         profile = {'files': [{'destination': 'models/model.gguf', 'size': 10_000_000_000}]}
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=1000)), \
+             patch.object(remote, 'drive_free_bytes', return_value=1000), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             with self.assertRaisesRegex(RuntimeError, 'less free space'):
                 remote.check_drive_space(Path(directory), profile)
@@ -233,9 +247,50 @@ class PreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / 'model.gguf.part').write_bytes(b'x' * 90)
             with patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=5_000_000_010)), \
+                 patch.object(remote, 'drive_free_bytes', return_value=10), \
                  contextlib.redirect_stdout(io.StringIO()) as output:
                 remote.check_drive_space(Path(directory), profile)
             self.assertIn('missing weights: 0.00 GB', output.getvalue())
+
+    def test_small_runtime_cache_is_not_misclassified_as_cloud_quota(self):
+        profile = {'files': [{'destination': 'model.gguf', 'size': 134_000_000_000}]}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=122_000_000_000)), \
+             patch.object(remote, 'drive_free_bytes', return_value=5_000_000_000_000), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            remote.check_drive_space(Path(directory), profile)
+        self.assertIn('Runtime DriveFS cache disk free: 122.00 GB', output.getvalue())
+        self.assertIn('Drive API cloud free: 5000.00 GB', output.getvalue())
+
+    def test_unknown_cloud_quota_does_not_fall_back_to_cache_quota(self):
+        profile = {'files': [{'destination': 'model.gguf', 'size': 134_000_000_000}]}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=1000)), \
+             patch.object(remote, 'drive_free_bytes', return_value=None), \
+             contextlib.redirect_stdout(io.StringIO()):
+            remote.check_drive_space(Path(directory), profile)
+
+    def test_quota_uses_cloud_api_and_normalizes_metadata_address(self):
+        metadata = io.StringIO('{"access_token":"credential-must-stay-private"}')
+        quota = io.StringIO('{"storageQuota":{"limit":"5000000000000","usage":"400000000000"}}')
+        local = Mock()
+        local.open.return_value = metadata
+        with patch.dict(remote.os.environ, {'TBE_EPHEM_CREDS_ADDR': 'metadata.internal:8181'}), \
+             patch.object(remote.urllib.request, 'build_opener', return_value=local), \
+             patch.object(remote.urllib.request, 'urlopen', return_value=quota) as cloud, \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(remote.drive_free_bytes(), 4_600_000_000_000)
+        self.assertTrue(local.open.call_args.args[0].full_url.startswith('http://metadata.internal:8181/'))
+        self.assertEqual(cloud.call_args.args[0].full_url,
+                         'https://www.googleapis.com/drive/v3/about?fields=storageQuota')
+        self.assertNotIn('credential-must-stay-private', output.getvalue())
+
+    def test_quota_failure_does_not_expose_credential_errors(self):
+        with patch.dict(remote.os.environ, {'TBE_EPHEM_CREDS_ADDR': 'metadata.internal:8181'}), \
+             patch.object(remote.urllib.request, 'build_opener', side_effect=RuntimeError('private-token-value')), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(remote.drive_free_bytes())
+        self.assertNotIn('private-token-value', output.getvalue())
 
     def test_unknown_variant_and_context_refused_before_download(self):
         options = {'flash': {'files': [], 'contexts': [32768], 'default_context': 32768}}
@@ -306,6 +361,11 @@ class EngineCacheTests(unittest.TestCase):
             flags = [arg for call in run.call_args_list for arg in call.args]
             self.assertIn('-DGGML_CUDA=ON', ' '.join(map(str, flags)))
             self.assertIn('-DCMAKE_CUDA_ARCHITECTURES=80', ' '.join(map(str, flags)))
+            # Pinned llama.cpp nests tools/server under COMMON && TOOLS && SERVER.
+            self.assertIn('-DLLAMA_BUILD_COMMON=ON', flags)
+            self.assertIn('-DLLAMA_BUILD_TOOLS=ON', flags)
+            self.assertIn('-DLLAMA_BUILD_SERVER=ON', flags)
+            self.assertNotIn('-DLLAMA_BUILD_TOOLS=OFF', flags)
             self.assertIn('--target', flags)
             self.assertEqual(flags[flags.index('--target') + 1], 'llama-server')
             self.assertEqual(binary, source / 'build' / 'bin' / 'llama-server')
@@ -489,7 +549,87 @@ class HealthTests(unittest.TestCase):
             self.assertIsNone(session.health(8086))
 
 
+class BootstrapLogTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.work = Path(self.tmp.name)
+        self.log = self.work / 'bootstrap.log'
+        self.log.touch()
+        (self.work / 'bootstrap.pid').write_text(str(os.getpid()))
+        self.instance = session.Session(None)
+        self.ssh = patch.object(self.instance, 'ssh', side_effect=self.local_reader)
+        self.ssh.start()
+        self.addCleanup(self.ssh.stop)
+
+    def local_reader(self, command):
+        args = shlex.split(command)
+        args[0], args[3] = sys.executable, str(self.work)
+        return subprocess.run(args, check=True, capture_output=True, text=True).stdout
+
+    def test_appended_lines_appear_once_without_losing_fast_output(self):
+        self.log.write_text('start\nSHA 0 GB\n')
+        self.assertEqual(self.instance.bootstrap_output(), 'start\nSHA 0 GB\n')
+        self.assertEqual(self.instance.bootstrap_output(), '')
+        added = ''.join(f'SHA {i} GB\n' for i in range(1, 20)) + 'same\nsame\n'
+        with self.log.open('a') as stream:
+            stream.write(added)
+        self.assertEqual(self.instance.bootstrap_output(), added)
+        self.assertEqual(self.instance.bootstrap_output(), '')
+
+    def test_partial_utf8_line_waits_until_complete_and_truncation_resets_cursor(self):
+        line = '準備中\n'.encode()
+        self.log.write_bytes(line[:2])
+        self.assertEqual(self.instance.bootstrap_output(), '')
+        with self.log.open('ab') as stream:
+            stream.write(line[2:])
+        self.assertEqual(self.instance.bootstrap_output(), '準備中\n')
+        self.log.write_text('new\n')
+        self.assertEqual(self.instance.bootstrap_output(), 'new\n')
+
+    def test_normal_prepare_exit_drains_logs_without_a_failure_marker(self):
+        (self.work / 'bootstrap.pid').write_text('0')
+        self.log.write_text(('build output\n' * 90000) + 'GLM_PREPARE_COMPLETE []\n')
+        first = self.instance.bootstrap_output()
+        self.assertNotIn('GLM_BOOTSTRAP_FAILED', first)
+        second = self.instance.bootstrap_output()
+        self.assertIn('GLM_PREPARE_COMPLETE', second)
+        self.assertNotIn('GLM_BOOTSTRAP_FAILED', second)
+        self.assertEqual((first + second).count('build output'), 90000)
+        self.assertEqual(self.instance.bootstrap_output(), '')
+
+    def test_exit_without_completion_reports_failure(self):
+        (self.work / 'bootstrap.pid').write_text('0')
+        self.log.write_text('engine crashed')
+        output = self.instance.bootstrap_output()
+        self.assertIn('engine crashed', output)
+        self.assertIn('GLM_BOOTSTRAP_FAILED', output)
+
+    def test_explicit_failure_is_not_hidden_by_a_completion_marker(self):
+        (self.work / 'failed').touch()
+        self.log.write_text('GLM_PREPARE_COMPLETE []\n')
+        self.assertIn('GLM_BOOTSTRAP_FAILED', self.instance.bootstrap_output())
+
+    def test_failed_file_detected_even_when_bootstrap_is_alive(self):
+        (self.work / 'failed').touch()
+        self.assertIn('GLM_BOOTSTRAP_FAILED', self.instance.bootstrap_output())
+
+
 class LifecycleTests(unittest.TestCase):
+    def test_prepare_rejects_explicit_failure_even_with_completion_in_same_poll(self):
+        instance = session.Session(SimpleNamespace(startup_minutes=1))
+        instance.master = Mock()
+        instance.master.poll.return_value = None
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(instance, 'bootstrap_output',
+                          return_value='GLM_PREPARE_COMPLETE []\nGLM_BOOTSTRAP_FAILED\n'), \
+             patch.object(instance, 'save_bootstrap_error', side_effect=RuntimeError('real failure')), \
+             contextlib.redirect_stdout(io.StringIO()):
+            instance.socket = str(Path(directory) / 'socket')
+            Path(instance.socket).touch()
+            with self.assertRaisesRegex(RuntimeError, 'real failure'):
+                instance.wait_prepare()
+
     def test_start_tunnel_and_bootstrap_use_dedicated_port_and_variant(self):
         manifest = session.manifest()
         args = SimpleNamespace(port=8086, context=65536, data_dir='/content/drive/MyDrive/GLM53-data',
@@ -538,7 +678,8 @@ class LifecycleTests(unittest.TestCase):
              patch.object(instance, 'allocate'), patch.object(instance, 'mount_drive'), \
              patch.object(instance, 'code') as code, \
              patch.object(instance, 'colab') as colab, \
-             patch.object(instance, 'ssh', return_value='GLM_PREPARE_COMPLETE ["full"]'), \
+             patch.object(instance, 'ssh', return_value=json.dumps({
+                 'offset': 32, 'text': 'GLM_PREPARE_COMPLETE ["full"]\n', 'failed': False})), \
              patch.object(session.subprocess, 'Popen', return_value=child) as popen, \
              contextlib.redirect_stdout(io.StringIO()):
             (Path(directory) / 'id_ed25519').touch()  # the runtime key already exists; no ssh-keygen run

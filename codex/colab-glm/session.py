@@ -24,6 +24,38 @@ ROOT = HERE.parents[1]
 STATE = HERE / '.runtime'
 SESSION = 'glm53-a100'
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+BOOTSTRAP_READER = """
+import json, sys
+from pathlib import Path
+work, offset = Path(sys.argv[1]), int(sys.argv[2])
+try:
+    pid = int((work / 'bootstrap.pid').read_text())
+    alive = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
+except (OSError, ValueError, IndexError):
+    alive = False
+with (work / 'bootstrap.log').open('rb') as stream:
+    size = stream.seek(0, 2)
+    if size < offset:
+        offset = 0
+    stream.seek(offset)
+    lines = []
+    while stream.tell() - offset < 1024 * 1024:
+        start = stream.tell()
+        line = stream.readline()
+        if not line:
+            break
+        if not line.endswith(b'\\n') and alive:
+            stream.seek(start)
+            break
+        lines.append(line)
+    offset = stream.tell()
+    stream.seek(max(0, size - 4096))
+    recent = stream.read().splitlines()
+    complete = any(line.startswith(b'GLM_PREPARE_COMPLETE ') for line in recent)
+    explicit_failure = (work / 'failed').exists() or b'GLM_BOOTSTRAP_FAILED' in recent
+print(json.dumps({'offset': offset, 'text': b''.join(lines).decode('utf-8', errors='replace'),
+                  'failed': explicit_failure or (not alive and offset >= size and not complete)}))
+"""
 
 
 def say(message):
@@ -166,6 +198,7 @@ class Session:
         self.owned = False
         self.drive_mounted = False
         self.master = None
+        self.bootstrap_offset = 0
         self.socket = f'/tmp/glm53-a100-{os.getuid()}-{uuid.uuid4().hex[:12]}.sock'
 
     def prepare_variants(self):
@@ -354,12 +387,12 @@ class Session:
             raise RuntimeError('SSH connection lost: ' + result.stderr.strip())
         return result.stdout
 
-    def bootstrap_tail(self, lines=4):
-        """Recent bootstrap output plus whether the bootstrap process is still alive."""
-        return self.ssh(f"tail -n {lines} /content/glm53-a100/bootstrap.log; "
-                        "pid=$(cat /content/glm53-a100/bootstrap.pid); state=$(ps -o stat= -p \"$pid\"); "
-                        "case \"$state\" in ''|Z*) echo GLM_BOOTSTRAP_FAILED;; esac; "
-                        "if test -f /content/glm53-a100/failed; then echo GLM_BOOTSTRAP_FAILED; fi")
+    def bootstrap_output(self):
+        """Read new complete lines once; retain a byte cursor instead of replaying a tail window."""
+        result = json.loads(self.ssh(shlex.join([
+            'python3', '-c', BOOTSTRAP_READER, '/content/glm53-a100', str(self.bootstrap_offset)])))
+        self.bootstrap_offset = result['offset']
+        return result['text'] + ('\nGLM_BOOTSTRAP_FAILED\n' if result['failed'] else '')
 
     def save_bootstrap_error(self):
         full = self.ssh('tail -n 80 /content/glm53-a100/bootstrap.log')
@@ -425,7 +458,6 @@ class Session:
 
     def wait_ready(self):
         deadline = time.monotonic() + self.args.startup_minutes * 60
-        last_tail = None
         while time.monotonic() < deadline:
             if self.master.poll() is not None:
                 raise RuntimeError(f'SSH tunnel failed. See {STATE / "ssh.log"}')
@@ -433,10 +465,9 @@ class Session:
                 say(f'準備完了: http://127.0.0.1:{self.args.port}/v1 ({self.variant})')
                 return
             if Path(self.socket).exists():
-                tail = self.bootstrap_tail()
-                if tail != last_tail:
+                tail = self.bootstrap_output()
+                if tail:
                     print(tail.rstrip(), flush=True)
-                    last_tail = tail
                 if 'GLM_BOOTSTRAP_FAILED' in tail:
                     self.save_bootstrap_error()
             time.sleep(5)
@@ -445,20 +476,23 @@ class Session:
     def wait_prepare(self):
         """No server to probe: the bootstrap prints its completion line and exits by itself."""
         deadline = time.monotonic() + self.args.startup_minutes * 60
-        last_tail = None
+        last_notice = time.monotonic()
         while time.monotonic() < deadline:
             if self.master.poll() is not None:
                 raise RuntimeError(f'SSH tunnel failed. See {STATE / "ssh.log"}')
             if Path(self.socket).exists():
-                tail = self.bootstrap_tail(lines=8)
-                if tail != last_tail:
+                tail = self.bootstrap_output()
+                if tail:
                     print(tail.rstrip(), flush=True)
-                    last_tail = tail
+                    last_notice = time.monotonic()
+                elif time.monotonic() - last_notice >= 30:
+                    say('新しいログがまだありません。別ターミナルの ./colab-glm progress で読取位置・子プロセスを確認できます。')
+                    last_notice = time.monotonic()
+                if 'GLM_BOOTSTRAP_FAILED' in tail:
+                    self.save_bootstrap_error()
                 if 'GLM_PREPARE_COMPLETE' in tail:
                     say('重みとエンジンの準備が完了しました。GDriveにキャッシュされています。')
                     return
-                if 'GLM_BOOTSTRAP_FAILED' in tail:
-                    self.save_bootstrap_error()
             time.sleep(5)
         raise RuntimeError('Prepare timed out; attempting Drive sync before stopping the runtime.')
 
@@ -546,9 +580,24 @@ def interrupted(signum, frame):
     raise KeyboardInterrupt(f'signal {signum}')
 
 
+def progress():
+    """Use the supervisor's existing SSH socket; no new runtime or Drive auth."""
+    sockets = sorted(Path('/tmp').glob(f'{SESSION}-{os.getuid()}-*.sock'),
+                     key=lambda path: path.stat().st_mtime, reverse=True)
+    helper = (HERE / 'progress_remote.py').read_text()
+    for path in sockets:
+        result = subprocess.run(['ssh', '-S', str(path), '-o', 'BatchMode=yes',
+                                 '-o', 'ConnectTimeout=5', 'root@colab-runtime', 'python3 -'],
+                                input=helper, capture_output=True, text=True, timeout=15)
+        if result.returncode == 0:
+            print(result.stdout.rstrip(), flush=True)
+            return
+    raise RuntimeError('稼働中のGLM SSH接続が見つかりません。prepare/startのターミナルを確認してください。')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['start', 'stop', 'codex', 'client', 'prepare', 'status', 'doctor', 'check-drive'])
+    parser.add_argument('command', choices=['start', 'stop', 'codex', 'client', 'prepare', 'status', 'progress', 'doctor', 'check-drive'])
     parser.add_argument('--port', type=int, default=8086)
     parser.add_argument('--context', type=int, help='Context length; the options differ per variant (see manifest.json)')
     parser.add_argument('--data-dir', default='/content/drive/MyDrive/GLM53-data')
@@ -592,6 +641,9 @@ def main():
         return 0
     if args.command == 'stop':
         stop()
+        return 0
+    if args.command == 'progress':
+        progress()
         return 0
     if args.command == 'status':
         subprocess.run(['colab', 'status', '-s', SESSION], check=True)

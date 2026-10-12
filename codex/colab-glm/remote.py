@@ -35,9 +35,21 @@ def atomic_json(path, data):
 
 def digest(path):
     h = hashlib.sha256()
+    total = path.stat().st_size
+    read = 0
+    started = last_report = time.monotonic()
+    print(f'SHA-256 verification: {path.name}: 0.00/{total / 1e9:.2f} GB', flush=True)
     with path.open('rb') as stream:
         while block := stream.read(8 * 1024 * 1024):
             h.update(block)
+            read += len(block)
+            now = time.monotonic()
+            if now - last_report >= 20:
+                elapsed = max(0.001, now - started)
+                print(f'SHA-256 {path.name}: {read / 1e9:.2f}/{total / 1e9:.2f} GB '
+                      f'({read / elapsed / 1e6:.1f} MB/s)', flush=True)
+                last_report = now
+    print(f'SHA-256 read complete: {path.name}: {read / 1e9:.2f}/{total / 1e9:.2f} GB', flush=True)
     return h.hexdigest()
 
 
@@ -82,6 +94,33 @@ def select_context(profile, requested):
     return value
 
 
+def drive_free_bytes():
+    """Drive cloud quota, not DriveFS statvfs (which reports this VM's cache disk)."""
+    try:
+        address = os.environ.get('TBE_EPHEM_CREDS_ADDR')
+        if not address:
+            raise RuntimeError('Drive metadata credential endpoint is unavailable')
+        if '://' not in address:
+            address = 'http://' + address
+        request = urllib.request.Request(
+            address.rstrip('/') + '/computeMetadata/v1/instance/service-accounts/default/token',
+            headers={'Metadata-Flavor': 'Google'})
+        local = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with local.open(request, timeout=10) as response:
+            token = json.load(response)['access_token']
+        request = urllib.request.Request('https://www.googleapis.com/drive/v3/about?fields=storageQuota',
+                                         headers={'Authorization': 'Bearer ' + token})
+        with urllib.request.urlopen(request, timeout=15) as response:
+            quota = json.load(response)['storageQuota']
+        if 'limit' not in quota:
+            return float('inf')
+        return max(0, int(quota['limit']) - int(quota['usage']))
+    except Exception as exc:
+        print(f'Drive cloud quota unavailable ({type(exc).__name__}); '
+              'mounted filesystem free space will not be treated as Drive quota.', flush=True)
+        return None
+
+
 def check_drive_space(data, profile):
     missing = 0
     for item in profile['files']:
@@ -91,10 +130,16 @@ def check_drive_space(data, profile):
         missing += max(0, item['size'] - present)
         if item['destination'].endswith('.gguf'):
             print(f'GGUF cache: {path.name}: {present / 1e9:.2f}/{item["size"] / 1e9:.2f} GB', flush=True)
-    free = shutil.disk_usage(data).free
-    print(f'Drive reported free space: {free / 1e9:.2f} GB; missing weights: {missing / 1e9:.2f} GB', flush=True)
-    if free < missing:
-        raise RuntimeError('Drive reports less free space than the missing weights; download not started.')
+    cache_free = shutil.disk_usage(data).free
+    print(f'Runtime DriveFS cache disk free: {cache_free / 1e9:.2f} GB; '
+          f'missing weights: {missing / 1e9:.2f} GB', flush=True)
+    free = drive_free_bytes()
+    if free is not None:
+        reserve = 2_000_000_000 if profile.get('engine') == 'maya' else 0
+        print(f'Drive API cloud free: {free / 1e9:.2f} GB; required: {(missing + reserve) / 1e9:.2f} GB', flush=True)
+        if free < missing + reserve:
+            raise RuntimeError('Drive cloud storage reports less free space than the missing weights and pack; '
+                               'download not started.')
 
 
 def fetch_variant(profile, data, reverify):
@@ -140,6 +185,8 @@ def fetch_verified(url, path, size, sha256, *, reverify=False):
                     return
             except ValueError:
                 pass
+        print(f'Cached file needs SHA-256 recheck: {path.name} '
+              '(verification record, update time or --reverify); no new download.', flush=True)
         if stat.st_size != size or digest(path) != sha256:
             raise RuntimeError(f'Existing file fails verification: {path}. Move it aside before retrying.')
     else:
@@ -180,7 +227,6 @@ def fetch_verified(url, path, size, sha256, *, reverify=False):
                     raise
                 print(f'Download retry {attempt + 1}: {exc}', flush=True)
                 time.sleep(min(5 * (attempt + 1), 20))
-        print('SHA-256 verification:', path.name, flush=True)
         if partial.stat().st_size != size or digest(partial) != sha256:
             raise RuntimeError(f'SHA-256 mismatch: {partial}. Move it aside before retrying.')
         partial.replace(path)
@@ -253,7 +299,8 @@ def llama_server(manifest, data, signature, nvcc):
     env['PATH'] = str(python.parent) + os.pathsep + env['PATH']
     run('cmake', '-S', source, '-B', source / 'build', '-DCMAKE_BUILD_TYPE=Release',
         '-DGGML_CUDA=ON', '-DCMAKE_CUDA_ARCHITECTURES=80', '-DBUILD_SHARED_LIBS=OFF',
-        '-DLLAMA_BUILD_TESTS=OFF', '-DLLAMA_BUILD_EXAMPLES=OFF', '-DLLAMA_BUILD_TOOLS=OFF',
+        '-DLLAMA_BUILD_COMMON=ON', '-DLLAMA_BUILD_TOOLS=ON', '-DLLAMA_BUILD_SERVER=ON',
+        '-DLLAMA_BUILD_TESTS=OFF', '-DLLAMA_BUILD_EXAMPLES=OFF', '-DLLAMA_BUILD_APP=OFF',
         '-DLLAMA_BUILD_UI=OFF', '-DLLAMA_USE_PREBUILT_UI=OFF',
         f'-DCMAKE_CUDA_COMPILER={nvcc}', cwd=source, env=env)
     run('cmake', '--build', source / 'build', '--target', 'llama-server', '-j', build_jobs(), cwd=source, env=env)
