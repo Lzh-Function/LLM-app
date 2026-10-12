@@ -409,6 +409,39 @@ class EngineCacheTests(unittest.TestCase):
         self.assertEqual(chdirs, [Path('/maya')])
         self.assertEqual(len(fetch.call_args_list), 4)
 
+    def run_prepare(self, argv, work):
+        (Path(work) / 'manifest.json').write_text(json.dumps(self.manifest))
+        with patch.object(remote, 'WORK', Path(work)), \
+             patch.object(remote, 'ensure_drive', return_value=Path(work) / 'drive'), \
+             patch.object(remote, 'check_server_port'), patch.object(remote, 'check_drive_space'), \
+             patch.object(remote, 'check_accelerator'), patch.object(remote, 'check_ram'), \
+             patch.object(remote.shutil, 'which', return_value='/usr/bin/nvcc'), \
+             patch.object(remote.subprocess, 'check_output', return_value='nvcc'), \
+             patch.object(remote, 'engine_signature', return_value='sig'), \
+             patch.object(remote, 'fetch_verified') as fetch, \
+             patch.object(remote, 'llama_server', return_value=Path('/engine/llama-server')) as llama, \
+             patch.object(remote, 'maya_setup', return_value=(Path('/venv/bin/python'), Path('/maya'), Path('/maya/c.json'))) as maya, \
+             patch.object(remote.os, 'execv') as execv, \
+             patch.object(sys, 'argv', ['remote.py', *argv]), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            remote.main()
+        return fetch, llama, maya, execv, output.getvalue()
+
+    def test_prepare_without_variant_fetches_all_variants_and_starts_nothing(self):
+        with tempfile.TemporaryDirectory() as work:
+            fetch, llama, maya, execv, output = self.run_prepare(['--prepare'], work)
+        self.assertEqual(execv.call_count, 0)          # prepare never becomes a server
+        self.assertEqual(maya.call_count, 1)           # Maya's setup also writes the pack
+        self.assertEqual(llama.call_count, 2)          # the second llama variant reuses the cached binary
+        self.assertEqual(len(fetch.call_args_list), sum(len(v['files']) for v in self.manifest['variants'].values()))
+        self.assertIn('GLM_PREPARE_COMPLETE ["flash", "flash-uncensored", "full"]', output)
+
+    def test_prepare_of_one_variant_leaves_the_others_untouched(self):
+        with tempfile.TemporaryDirectory() as work:
+            fetch, llama, maya, execv, output = self.run_prepare(['--prepare', '--variant', 'full', '--context', '32768'], work)
+        self.assertEqual((maya.call_count, llama.call_count, len(fetch.call_args_list)), (0, 1, 4))
+        self.assertIn('GLM_PREPARE_COMPLETE ["full"]', output)
+
 
 class HealthTests(unittest.TestCase):
     """Maya and llama.cpp answer /health differently; both answer /props."""
@@ -487,6 +520,53 @@ class LifecycleTests(unittest.TestCase):
             uploaded = [call.args[4] for call in colab.call_args_list]
             self.assertIn('content/glm53-a100/manifest.json', uploaded)
             self.assertIn('content/glm53-a100/remote.py', uploaded)
+
+    def prepare_start(self, args):
+        """Run the prepare path against a fake runtime and hand back what it asked for."""
+        instance = session.Session(args)
+        socket_path = Path(instance.socket)
+        socket_path.touch()
+        self.addCleanup(socket_path.unlink, missing_ok=True)
+        child = Mock()
+        child.poll.return_value = None
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(session, 'STATE', Path(directory)), \
+             patch.object(session, 'catalog') as catalog, \
+             patch.object(session, 'available_port') as available, \
+             patch.object(session, 'health') as health, \
+             patch.object(session.shutil, 'which', return_value='/bin/tool'), \
+             patch.object(instance, 'allocate'), patch.object(instance, 'mount_drive'), \
+             patch.object(instance, 'code') as code, \
+             patch.object(instance, 'colab') as colab, \
+             patch.object(instance, 'ssh', return_value='GLM_PREPARE_COMPLETE ["full"]'), \
+             patch.object(session.subprocess, 'Popen', return_value=child) as popen, \
+             contextlib.redirect_stdout(io.StringIO()):
+            (Path(directory) / 'id_ed25519').touch()  # the runtime key already exists; no ssh-keygen run
+            instance.start(prepare=True)
+        launched = [call.args[0] for call in code.call_args_list]
+        return {'command': popen.call_args.args[0],
+                'bootstrap': next(text for text in launched if 'bootstrap.pid' in text),
+                'uploaded': [call.args[4] for call in colab.call_args_list],
+                'serving_checks': (catalog.called, health.called, available.called)}
+
+    def test_prepare_skips_the_port_forward_and_the_codex_checks(self):
+        args = SimpleNamespace(port=8086, context=65536, data_dir='/content/drive/MyDrive/GLM53-data',
+                               reverify=False, startup_minutes=1, variant=None)
+        started = self.prepare_start(args)
+        self.assertEqual(started['serving_checks'], (False, False, False))
+        self.assertNotIn('-L', started['command'])
+        self.assertIn("'--prepare'", started['bootstrap'])
+        self.assertNotIn("'--variant'", started['bootstrap'])  # every variant, each with its own default context
+        self.assertIn('content/glm53-a100/remote.py', started['uploaded'])
+
+    def test_prepare_of_one_variant_passes_variant_and_context(self):
+        args = SimpleNamespace(port=8086, context=32768, data_dir='/content/drive/MyDrive/GLM53-data',
+                               reverify=True, startup_minutes=1, variant='full')
+        started = self.prepare_start(args)
+        self.assertIn("'--prepare'", started['bootstrap'])
+        self.assertIn("'--variant', 'full'", started['bootstrap'])
+        self.assertIn("'--context', '32768'", started['bootstrap'])
+        self.assertIn("'--reverify'", started['bootstrap'])
 
     def test_close_flushes_before_stopping_owned_runtime(self):
         instance = session.Session(None)

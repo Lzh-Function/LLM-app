@@ -97,6 +97,35 @@ def check_drive_space(data, profile):
         raise RuntimeError('Drive reports less free space than the missing weights; download not started.')
 
 
+def fetch_variant(profile, data, reverify):
+    """Every pinned file of one variant, resumed and SHA-256 verified before publishing."""
+    for item in profile['files']:
+        url = f'https://huggingface.co/{item["repo"]}/resolve/{item["revision"]}/{item["source"]}'
+        fetch_verified(url, data / item['destination'], item['size'], item['sha256'], reverify=reverify)
+
+
+def prepare_variants(manifest, requested):
+    """--prepare without --variant covers every variant, so one rented runtime pays for all caches."""
+    if not requested:
+        return sorted(manifest['variants'])
+    select_variant(manifest, requested)  # Same unknown-name error as a start.
+    return [requested]
+
+
+def prepare_variant(manifest, variant, profile, data, context, nvcc, cuda_version, reverify):
+    """Weights plus the compiled engine (Maya's pack included) on Drive; the server is never started."""
+    check_drive_space(data, profile)
+    signature = engine_signature(manifest, profile, nvcc, cuda_version)
+    print(f'Preparing {variant} ({profile["model"]}), engine {profile["engine"]}, context {context}', flush=True)
+    fetch_variant(profile, data, reverify)
+    if profile['engine'] == 'maya':
+        # Maya's setup writes the pack next to the GGUF files and caches the engine under the same signature.
+        maya_setup(manifest, profile, data, context, manifest['server_port'], signature)
+    else:
+        llama_server(manifest, data, signature, nvcc)
+    print(f'Prepared {variant}: weights and engine cached on Drive', flush=True)
+
+
 def fetch_verified(url, path, size, sha256, *, reverify=False):
     """Resume in destination directory, validate range and hash before publishing."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -311,16 +340,16 @@ def main():
     parser.add_argument('--context', type=int)
     parser.add_argument('--variant')
     parser.add_argument('--reverify', action='store_true')
+    parser.add_argument('--prepare', action='store_true',
+                        help='Fetch weights and build the engines for the selected variant(s), then exit without serving')
     args = parser.parse_args()
     data = ensure_drive(Path(args.data_dir))  # Must precede every weight/cache download.
     WORK.mkdir(exist_ok=True)
     manifest = json.loads((WORK / 'manifest.json').read_text())
-    variant, profile = select_variant(manifest, args.variant)
-    context = select_context(profile, args.context)
+    names = prepare_variants(manifest, args.variant) if args.prepare else [select_variant(manifest, args.variant)[0]]
     port = manifest['server_port']
     check_server_port(port)  # Fail before building or downloading.
-    check_drive_space(data, profile)
-    print(f'Model variant: {variant} ({profile["model"]}), engine {profile["engine"]}, context {context}', flush=True)
+    print('Model variants: ' + ', '.join(names), flush=True)
     check_accelerator()
     check_ram()
     nvcc = shutil.which('nvcc')
@@ -328,10 +357,20 @@ def main():
         raise RuntimeError('Colab CUDA toolkit nvcc is missing.')
     cuda_version = subprocess.check_output([nvcc, '--version'], text=True)
     print(cuda_version, flush=True)
+    if args.prepare:
+        for name in names:
+            profile = manifest['variants'][name]
+            prepare_variant(manifest, name, profile, data, select_context(profile, args.context),
+                            nvcc, cuda_version, args.reverify)
+        print('GLM_PREPARE_COMPLETE ' + json.dumps(names), flush=True)
+        return
+    variant = names[0]
+    profile = manifest['variants'][variant]
+    context = select_context(profile, args.context)
+    check_drive_space(data, profile)
+    print(f'Model variant: {variant} ({profile["model"]}), engine {profile["engine"]}, context {context}', flush=True)
+    fetch_variant(profile, data, args.reverify)
     signature = engine_signature(manifest, profile, nvcc, cuda_version)
-    for item in profile['files']:
-        url = f'https://huggingface.co/{item["repo"]}/resolve/{item["revision"]}/{item["source"]}'
-        fetch_verified(url, data / item['destination'], item['size'], item['sha256'], reverify=args.reverify)
     if profile['engine'] == 'maya':
         python, source, config = maya_setup(manifest, profile, data, context, port, signature)
         argv = [str(python), str(source / 'maya.py'), '--config', str(config),

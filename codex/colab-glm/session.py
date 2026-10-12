@@ -160,12 +160,17 @@ def codex_command(port, context, arguments, profile):
 class Session:
     def __init__(self, args):
         self.args = args
-        self.variant, self.profile = select_variant(getattr(args, 'variant', None))
+        self.requested_variant = getattr(args, 'variant', None)
+        self.variant, self.profile = select_variant(self.requested_variant)
         self.children = []
         self.owned = False
         self.drive_mounted = False
         self.master = None
         self.socket = f'/tmp/glm53-a100-{os.getuid()}-{uuid.uuid4().hex[:12]}.sock'
+
+    def prepare_variants(self):
+        """prepare without --variant covers every variant, so one runtime builds all caches."""
+        return [self.variant] if self.requested_variant else sorted(manifest()['variants'])
 
     def run(self, command, *, timeout=None, stream_output=False, progress=None, **kwargs):
         process = subprocess.Popen(command, **kwargs)
@@ -349,15 +354,29 @@ class Session:
             raise RuntimeError('SSH connection lost: ' + result.stderr.strip())
         return result.stdout
 
-    def start(self):
+    def bootstrap_tail(self, lines=4):
+        """Recent bootstrap output plus whether the bootstrap process is still alive."""
+        return self.ssh(f"tail -n {lines} /content/glm53-a100/bootstrap.log; "
+                        "pid=$(cat /content/glm53-a100/bootstrap.pid); state=$(ps -o stat= -p \"$pid\"); "
+                        "case \"$state\" in ''|Z*) echo GLM_BOOTSTRAP_FAILED;; esac; "
+                        "if test -f /content/glm53-a100/failed; then echo GLM_BOOTSTRAP_FAILED; fi")
+
+    def save_bootstrap_error(self):
+        full = self.ssh('tail -n 80 /content/glm53-a100/bootstrap.log')
+        (STATE / 'bootstrap-error.log').write_text(full)
+        raise RuntimeError(f'Bootstrap failed. See {STATE / "bootstrap-error.log"}')
+
+    def start(self, prepare=False):
         remote_port = manifest()['server_port']
         if not isinstance(remote_port, int) or not 1 <= remote_port <= 65535 or remote_port == 8080:
             raise RuntimeError('manifest must select a dedicated remote GLM port, not Colab port 8080.')
-        for tool in ('colab', 'ssh', 'ssh-keygen', 'codex'):
+        tools = ('colab', 'ssh', 'ssh-keygen') if prepare else ('colab', 'ssh', 'ssh-keygen', 'codex')
+        for tool in tools:
             if not shutil.which(tool):
                 raise RuntimeError(f'{tool} is required.')
-        available_port(self.args.port)
-        catalog(self.args.context, self.profile)  # Verify Codex integration before renting a GPU.
+        if not prepare:
+            available_port(self.args.port)
+            catalog(self.args.context, self.profile)  # Verify Codex integration before renting a GPU.
         identity = STATE / 'id_ed25519'
         if not identity.is_file():
             self.run(['ssh-keygen', '-t', 'ed25519', '-N', '', '-f', str(identity), '-q'])
@@ -366,14 +385,28 @@ class Session:
         self.code("from pathlib import Path\nimport os\nassert os.path.ismount('/content/drive') and Path('/content/drive/MyDrive').is_dir(), 'Drive mount failed'\nPath('/content/glm53-a100').mkdir(exist_ok=True)\n")
         for name in ('remote.py', 'manifest.json'):
             self.colab('upload', '-s', SESSION, str(HERE / name), 'content/glm53-a100/' + name, timeout=45)
-        remote_args = ['python3', '-u', '/content/glm53-a100/remote.py', '--data-dir', self.args.data_dir,
-                       '--context', str(self.args.context), '--variant', self.variant]
+        remote_args = ['python3', '-u', '/content/glm53-a100/remote.py', '--data-dir', self.args.data_dir]
+        if prepare:
+            # Without --variant the remote prepares every variant; each one uses its own default context.
+            remote_args.append('--prepare')
+            if self.requested_variant:
+                remote_args += ['--variant', self.requested_variant, '--context', str(self.args.context)]
+        else:
+            remote_args += ['--context', str(self.args.context), '--variant', self.variant]
         if self.args.reverify:
             remote_args.append('--reverify')
         self.code('import subprocess\nfrom pathlib import Path\n'
                   "log=open('/content/glm53-a100/bootstrap.log','ab',buffering=0)\n"
                   f'p=subprocess.Popen({remote_args!r},stdout=log,stderr=log,start_new_session=True)\n'
                   "Path('/content/glm53-a100/bootstrap.pid').write_text(str(p.pid))\nprint('BOOTSTRAP_PID',p.pid)\n")
+        self.open_tunnel(None if prepare else remote_port)
+        if prepare:
+            return self.wait_prepare()
+        return self.wait_ready()
+
+    def open_tunnel(self, remote_port):
+        """The multiplexed SSH connection; a port forward only when a server will answer on the far side."""
+        identity = STATE / 'id_ed25519'
         proxy = shlex.join(['colab', 'ssh', '--proxy-mode', '-s', SESSION, '--identity', str(identity)])
         ssh_log = (STATE / 'ssh.log').open('ab', buffering=0)
         command = ['ssh', '-M', '-S', self.socket, '-N', '-i', str(identity),
@@ -382,11 +415,15 @@ class Session:
                    '-o', 'ExitOnForwardFailure=yes', '-o', 'StrictHostKeyChecking=accept-new',
                    '-o', f'UserKnownHostsFile={STATE / "known_hosts"}',
                    '-o', 'HostKeyAlias=glm53-a100-' + uuid.uuid4().hex,
-                   '-o', 'ProxyCommand=' + proxy,
-                   '-L', f'127.0.0.1:{self.args.port}:127.0.0.1:{remote_port}', 'root@colab-runtime']
-        self.master = subprocess.Popen(command, stdout=ssh_log, stderr=ssh_log, start_new_session=True)
+                   '-o', 'ProxyCommand=' + proxy]
+        if remote_port:
+            command += ['-L', f'127.0.0.1:{self.args.port}:127.0.0.1:{remote_port}']
+        self.master = subprocess.Popen(command + ['root@colab-runtime'], stdout=ssh_log, stderr=ssh_log,
+                                       start_new_session=True)
         ssh_log.close()
         self.children.append(self.master)
+
+    def wait_ready(self):
         deadline = time.monotonic() + self.args.startup_minutes * 60
         last_tail = None
         while time.monotonic() < deadline:
@@ -396,19 +433,34 @@ class Session:
                 say(f'準備完了: http://127.0.0.1:{self.args.port}/v1 ({self.variant})')
                 return
             if Path(self.socket).exists():
-                tail = self.ssh("tail -n 4 /content/glm53-a100/bootstrap.log; "
-                                "pid=$(cat /content/glm53-a100/bootstrap.pid); state=$(ps -o stat= -p \"$pid\"); "
-                                "case \"$state\" in ''|Z*) echo GLM_BOOTSTRAP_FAILED;; esac; "
-                                "if test -f /content/glm53-a100/failed; then echo GLM_BOOTSTRAP_FAILED; fi")
+                tail = self.bootstrap_tail()
                 if tail != last_tail:
                     print(tail.rstrip(), flush=True)
                     last_tail = tail
                 if 'GLM_BOOTSTRAP_FAILED' in tail:
-                    full = self.ssh('tail -n 80 /content/glm53-a100/bootstrap.log')
-                    (STATE / 'bootstrap-error.log').write_text(full)
-                    raise RuntimeError(f'Bootstrap failed. See {STATE / "bootstrap-error.log"}')
+                    self.save_bootstrap_error()
             time.sleep(5)
         raise RuntimeError('Startup timed out; attempting Drive sync before stopping the runtime.')
+
+    def wait_prepare(self):
+        """No server to probe: the bootstrap prints its completion line and exits by itself."""
+        deadline = time.monotonic() + self.args.startup_minutes * 60
+        last_tail = None
+        while time.monotonic() < deadline:
+            if self.master.poll() is not None:
+                raise RuntimeError(f'SSH tunnel failed. See {STATE / "ssh.log"}')
+            if Path(self.socket).exists():
+                tail = self.bootstrap_tail(lines=8)
+                if tail != last_tail:
+                    print(tail.rstrip(), flush=True)
+                    last_tail = tail
+                if 'GLM_PREPARE_COMPLETE' in tail:
+                    say('重みとエンジンの準備が完了しました。GDriveにキャッシュされています。')
+                    return
+                if 'GLM_BOOTSTRAP_FAILED' in tail:
+                    self.save_bootstrap_error()
+            time.sleep(5)
+        raise RuntimeError('Prepare timed out; attempting Drive sync before stopping the runtime.')
 
     def flush_drive(self):
         minutes = getattr(self.args, 'flush_minutes', 10.0)
@@ -496,16 +548,18 @@ def interrupted(signum, frame):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['start', 'stop', 'codex', 'client', 'status', 'doctor', 'check-drive'])
+    parser.add_argument('command', choices=['start', 'stop', 'codex', 'client', 'prepare', 'status', 'doctor', 'check-drive'])
     parser.add_argument('--port', type=int, default=8086)
     parser.add_argument('--context', type=int, help='Context length; the options differ per variant (see manifest.json)')
     parser.add_argument('--data-dir', default='/content/drive/MyDrive/GLM53-data')
-    parser.add_argument('--variant', help='Model variant: flash / flash-uncensored / full (default from manifest.json)')
-    parser.add_argument('--max-hours', type=float, default=6.0, help='Hard runtime lifetime, including setup (default 6 hours)')
-    parser.add_argument('--startup-minutes', type=float, default=240.0,
-                        help='Maximum first-run setup: downloads plus the engine build (default 240 minutes)')
-    parser.add_argument('--flush-minutes', type=float, default=10.0,
-                        help='Maximum Drive flush wait during shutdown (default 10 minutes; extra to max-hours)')
+    parser.add_argument('--variant', help='Model variant: flash / flash-uncensored / full (default from manifest.json; '
+                                         'prepare without it covers all three)')
+    parser.add_argument('--max-hours', type=float,
+                        help='Hard runtime lifetime, including setup (default 6 hours; 10 for prepare)')
+    parser.add_argument('--startup-minutes', type=float,
+                        help='Maximum first-run setup: downloads plus the engine build (default 240 minutes; 480 for prepare)')
+    parser.add_argument('--flush-minutes', type=float,
+                        help='Maximum Drive flush wait during shutdown (default 10 minutes, 30 for prepare; extra to max-hours)')
     parser.add_argument('--reverify', action='store_true', help='Read and hash all cached model files again')
     parser.add_argument('--drive-auth', choices=['cli', 'browser'], default='cli',
                         help='Drive mounting via CLI or the browser UI of the existing runtime')
@@ -514,6 +568,10 @@ def main():
         extra = extra[1:]
     if extra and args.command not in ('client', 'codex'):
         parser.error('Extra arguments are supported only after client/codex --')
+    limits = {'prepare': (10.0, 480.0, 30.0)}.get(args.command, (6.0, 240.0, 10.0))
+    args.max_hours = limits[0] if args.max_hours is None else args.max_hours
+    args.startup_minutes = limits[1] if args.startup_minutes is None else args.startup_minutes
+    args.flush_minutes = limits[2] if args.flush_minutes is None else args.flush_minutes
     if not 1 <= args.port <= 65535 or args.max_hours <= 0 or args.startup_minutes <= 0 or args.flush_minutes <= 0:
         parser.error('port and time limits must be positive and valid')
     data = Path(args.data_dir)
@@ -558,9 +616,12 @@ def main():
         raise RuntimeError('Supervisor already running. Use client or stop.') from None
     state_path = STATE / 'session.json'
     session = Session(args)
+    preparing = session.prepare_variants() if args.command == 'prepare' else [session.variant]
+    if args.command == 'prepare' and args.context and len(preparing) > 1:
+        parser.error('--context を prepare で使うには --variant を1つに決めてください（変種ごとに既定値が使われます）')
     args.context = select_context(session.profile, args.context)
     state_path.write_text(json.dumps({'pid': os.getpid(), 'identity': proc_identity(os.getpid()),
-                                     'port': args.port, 'variant': session.variant,
+                                     'port': args.port, 'variant': ','.join(preparing),
                                      'context': args.context, 'flush_minutes': args.flush_minutes}))
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGALRM):
         signal.signal(sig, interrupted)
@@ -570,7 +631,10 @@ def main():
         if args.command == 'check-drive':
             session.check_drive()
             return 0
-        session.start()
+        session.start(prepare=args.command == 'prepare')
+        if args.command == 'prepare':
+            say('GDriveを同期してruntimeを停止します。')
+            return 0
         child = None
         if args.command == 'codex':
             child = subprocess.Popen(codex_command(args.port, args.context, extra, session.profile))
