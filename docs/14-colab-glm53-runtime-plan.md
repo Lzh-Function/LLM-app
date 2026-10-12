@@ -1,17 +1,16 @@
 **GLM-5.3／FlashをColab A100で使う実行計画 — 2026-10-12**
 
-[13-colab-glm53-research.md](13-colab-glm53-research.md) の調査を受けて、このruntimeで実際に起動する4変種（通常版Flash・無検閲Flash・通常版GLM-5.3・無検閲GLM-5.3）の配布、エンジン、コンテキスト長、容量予算を決めた文書。ここでは**まだ実装していない**。決めた内容と、Colab側で先に測る必要がある項目を分けて書く。
+[13-colab-glm53-research.md](13-colab-glm53-research.md) の調査を受けて、このruntimeで実際に起動する3変種（通常版Flash・無検閲Flash・通常版GLM-5.3）の配布、エンジン、コンテキスト長、容量予算を決めた文書。ここでは**まだ実装していない**。決めた内容と、Colab側で先に測る必要がある項目を分けて書く。
 
 容量・速度の判定は公開ファイルサイズと配布者の測定からの推定で、このA100でのロード・推論実測は未実施。実測値は「Colab runtimeで測る項目」にまとめた。
 
-## 結論（4変種）
+## 結論（3変種）
 
 | variant | 配布（固定revision） | 量子化 | 重みサイズ | HF downloads | エンジン | context |
 | --- | --- | --- | ---: | ---: | --- | ---: |
 | `flash` | [peasantsmith/GLM-5.3-Flash-Maya-GGUF](https://huggingface.co/peasantsmith/GLM-5.3-Flash-Maya-GGUF/tree/f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da) `Maya-L` | gate/up IQ3_S・down IQ4_XS・一部Q5_Kの混合 | **156.32GB / 145.58GiB** | 71,734 | Project Maya | 131072 |
 | `flash-uncensored` | [BoldingBuilds/orcarouter_GLM-5.3-Flash-Uncensored-GGUF](https://huggingface.co/BoldingBuilds/orcarouter_GLM-5.3-Flash-Uncensored-GGUF/tree/8a31ca66485373f9d5c002f5400b2aecaff84dfe) `IQ3_XXS` | IQ3_XXS（3分割＋mmproj 1.13GB） | **134.31GB / 125.08GiB** | **484,227** | llama.cpp（補助候補としてMaya `--gguf-dir`） | 131072 |
 | `full` | [autotrust/GLM-5.3-GGUF-DGX-Spark](https://huggingface.co/autotrust/GLM-5.3-GGUF-DGX-Spark/tree/dc02b40177c64563867260cd349b2fbffb38c102) `SLIM-E192` | routed experts IQ2_XXS（2.06bpw）・他Q8_0、256→192 expert | **160.76GB / 149.72GiB** | 8,963 | llama.cpp | 65536 |
-| `full-uncensored` | **未確定**（下記「通常版の無検閲版が埋まらない」） | — | — | — | — | — |
 
 downloads は2026-10-12にHF APIで取得した値。無検閲FlashをBoldingBuildsにした根拠は、確認したFlash無検閲GGUFの中でdownload数が2桁大きく、配布者が空応答・coherenceのgateを通した現行版だから。通常版FlashをMaya-Lにしたのは、Mayaの公開量子化で最大かつ作者評価がFP8の99.2%（5タスク各400問のzero-shot選択式）で、RAM resident運用の想定がこのruntimeと一致するため。
 
@@ -31,7 +30,7 @@ RAMは `MemTotal 175,166,472 KiB` = **167.05GiB = 179.37GB**、VRAMは80GB = **7
 
 KV cache の係数は、FlashがMayaの報告で128K状態が1.78GB（fp16）・1.13GB（int8）、GLM-5.3が配布者READMEの「16Kトークンあたり約1.2GiB」（圧縮MLA/DSA cache、約75KiB/token）。CUDA context、compute buffer、prefill buffer、OS、SSHトンネルは上の「残り」から払う。
 
-**同時起動はできない。** `flash`（145.58GiB）と `flash-uncensored`（125.08GiB）の合計は270.66GiBで、246.44GiBを超える。4変種は**1つずつ起動**し、切り替えは停止→起動で、重みはDriveに既にある前提。Qwenのruntimeと同時に走らせない。MayaのRAM tierはピン留めされたメモリで、空きRAMから自動計算されるため、他プロセスに食られると tier が小さくなる。
+**同時起動はできない。** `flash`（145.58GiB）と `flash-uncensored`（125.08GiB）の合計は270.66GiBで、246.44GiBを超える。3変種は**1つずつ起動**し、切り替えは停止→起動で、重みはDriveに既にある前提。Qwenのruntimeと同時に走らせない。MayaのRAM tierはピン留めされたメモリで、空きRAMから自動計算されるため、他プロセスに食られると tier が小さくなる。
 
 ## 速度の見通し
 
@@ -70,17 +69,11 @@ Flashは **131072**。KV cacheが1.13〜1.78GiBしか食わず、Mayaの選択�
 
 通常版は **65536** を既定にする。KV 4.8GiBで、prefill bufferとcompute bufferの余裕を残せる。131072（KV 9.6GiB）も容量的には狙えるが、まず65536で速度・安定を確認してから上げる。
 
-## 通常版GLM-5.3の無検閲版が埋まらない
+## 通常版GLM-5.3の無検閲版は作らない
 
 確認した中で最も小さい通常版無検閲GGUFでも [softwareweaver Q2_K 315.90GB / 294.20GiB](https://huggingface.co/softwareweaver/GLM-5.3-Uncensored-GGUF)、[Infatoshi EXL3 3.0bpw 292.65GB / 272.55GiB](https://huggingface.co/Infatoshi/GLM-5.3-UNCENSORED-EXL3-3.0bpw) で、246.44GiBに常駐しない。REAP等のexpert pruningを適用した通常版GGUFも探したが見つからない（Flashの [REAP50](https://huggingface.co/patrickbdevaney/GLM-5.3-Flash-REAP50-GGUF) と、通常版はMLX配布のみ）。HFのdownload数で上位を取れる配布に限定すると、`full-uncensored` はこのruntimeでは成立しない。
 
-選択肢は3つ。
-
-1. **`flash-uncensored` を無検閲版の答えにする。** 容量・実績・MTPのすべてで最も素直。無検閲の通常版を使う理由が「744Bの知識量」なら、次項とのトレードオフになる。
-2. **LoRAを `full` に適用する。** [ChuckMcSneed/GLM-5.3-UNCENSORED-LORA-GGUF](https://huggingface.co/ChuckMcSneed/GLM-5.3-UNCENSORED-LORA-GGUF)（1.34GB、274 downloads）は dealignai の GLM-5.3-UNCENSORED-FP8 から抽出したLoRAで、作者自身が "It's not very good." と書いている。baseは JANGQ-AI/GLM-5.3-FP8 で、IQ2_XXS＋expert pruning済みのSLIM-E192に当てた品質は未検証。llama.cppのLoRAが `glm-dsa` のMoEで効くかも未確認。実験枠としては置けるが、既定にはしない。
-3. **240GB以下の通常版無検閲配布が出るまで待つ。** HFのdownload数条件を満たす配布が現れた時点でmanifestに追加する形にしておけば、実装は変わらない。
-
-実装は `full-uncensored` を variant として予約だけしておき、未選択のうちに起動しようとしたら明示的にエラーにする運用を想定する。
+無検閲が必要なら `flash-uncensored` を使う。`full-uncensored` は作らない。240GB以下でdownload数上位を取れる通常版無検閲配布が出た時点で、manifestに variant を1行足せば追従できる。
 
 ## エンジンと起動設定
 
@@ -160,7 +153,6 @@ Qwenのruntimeと同じく、保存先はDrive内のみ（SSDフォールバッ�
 
 ## 決まっていないこと
 
-1. `full-uncensored` を上記3案のどれにするか。
-2. `full` を SLIM-E192（pruned・MTPなし）と UD-IQ1_S（未改変・MTPあり・余裕44.61GiB）のどちらにするか。実測速度が出るまで決めきれない。
-3. Mayaの `STRATA_GLM_PROMOTE_MIN` などのチューニングを既定に入れるか。A100での測定がない。
-4. Colabの一時ディスク容量とDrive読み帯域。上のprobeで確定する。
+1. `full` を SLIM-E192（pruned・MTPなし）と UD-IQ1_S（未改変・MTPあり・余裕44.61GiB）のどちらにするか。実測速度が出るまで決めきれない。
+2. Mayaの `STRATA_GLM_PROMOTE_MIN` などのチューニングを既定に入れるか。A100での測定がない。
+3. Colabの一時ディスク容量とDrive読み帯域。上のprobeで確定する。
