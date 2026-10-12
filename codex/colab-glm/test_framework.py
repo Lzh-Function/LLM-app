@@ -378,7 +378,7 @@ class EngineCacheTests(unittest.TestCase):
              patch.object(remote.subprocess, 'check_output', return_value='nvcc'), \
              patch.object(remote, 'engine_signature', return_value='sig'), \
              patch.object(remote, 'fetch_verified') as fetch, \
-             patch.object(remote, 'llama_server', return_value=Path('/content/strata-glm/llama.cpp/build/bin/llama-server')), \
+             patch.object(remote, 'llama_server', return_value=Path('/content/glm53-a100/llama.cpp/build/bin/llama-server')), \
              patch.object(remote, 'maya_setup', return_value=(Path('/venv/bin/python'), Path('/maya'), Path('/maya/maya-maya-l.json'))), \
              patch.object(remote.os, 'execv', side_effect=execv), \
              patch.object(sys, 'argv', ['remote.py', '--variant', variant]), \
@@ -390,7 +390,7 @@ class EngineCacheTests(unittest.TestCase):
     def test_llama_variant_starts_llama_server_with_its_own_shards(self):
         with tempfile.TemporaryDirectory() as work:
             argv, fetch, chdirs = self.run_main('full', work)
-        self.assertEqual(argv[0], '/content/strata-glm/llama.cpp/build/bin/llama-server')
+        self.assertEqual(argv[0], '/content/glm53-a100/llama.cpp/build/bin/llama-server')
         self.assertEqual(argv[argv.index('-m') + 1],
                          str(Path(work) / 'drive' / 'models/slim-e192/GLM-5.3-Q2-DGX-Spark-00001-of-00004.gguf'))
         self.assertEqual(argv[argv.index('-c') + 1], 65536)
@@ -459,7 +459,7 @@ class HealthTests(unittest.TestCase):
 class LifecycleTests(unittest.TestCase):
     def test_start_tunnel_and_bootstrap_use_dedicated_port_and_variant(self):
         manifest = session.manifest()
-        args = SimpleNamespace(port=8086, context=65536, data_dir='/content/drive/MyDrive/Strata-data/glm53',
+        args = SimpleNamespace(port=8086, context=65536, data_dir='/content/drive/MyDrive/GLM53-data',
                                reverify=False, startup_minutes=1, variant='full')
         instance = session.Session(args)
         with tempfile.TemporaryDirectory() as directory:
@@ -483,10 +483,10 @@ class LifecycleTests(unittest.TestCase):
             bootstrap = next(text for text in launched if 'bootstrap.pid' in text)
             self.assertIn("'--variant', 'full'", bootstrap)
             self.assertIn("'--context', '65536'", bootstrap)
-            self.assertIn('/content/strata-glm/remote.py', bootstrap)
+            self.assertIn('/content/glm53-a100/remote.py', bootstrap)
             uploaded = [call.args[4] for call in colab.call_args_list]
-            self.assertIn('content/strata-glm/manifest.json', uploaded)
-            self.assertIn('content/strata-glm/remote.py', uploaded)
+            self.assertIn('content/glm53-a100/manifest.json', uploaded)
+            self.assertIn('content/glm53-a100/remote.py', uploaded)
 
     def test_close_flushes_before_stopping_owned_runtime(self):
         instance = session.Session(None)
@@ -515,7 +515,7 @@ class LifecycleTests(unittest.TestCase):
         instance.drive_mounted = True
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(session, 'STATE', Path(directory)), \
-             patch.object(instance, 'code', return_value='STRATA_DRIVE_SYNC=flushed') as code, \
+             patch.object(instance, 'code', return_value='GLM_DRIVE_SYNC=flushed') as code, \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(instance.flush_drive())
             self.assertEqual(code.call_args.kwargs['timeout'], 150)
@@ -559,7 +559,7 @@ class LifecycleTests(unittest.TestCase):
              patch.object(session, 'STATE', Path(directory)), \
              patch.object(sys, 'argv', ['session.py', 'check-drive', '--drive-auth', 'browser']), \
              patch.object(session.shutil, 'which', return_value='/bin/colab'), \
-             patch.object(session.Session, 'colab', side_effect=["Session 'strata-glm' not found.", error]) as colab, \
+             patch.object(session.Session, 'colab', side_effect=["Session 'glm53-a100' not found.", error]) as colab, \
              patch.object(session.Session, 'mount_drive') as mount, \
              patch.object(session, 'stop_runtime') as stop, \
              patch.object(signal, 'signal'), patch.object(signal, 'alarm'), \
@@ -570,7 +570,7 @@ class LifecycleTests(unittest.TestCase):
             stop.assert_called_once()
             self.assertEqual([call.args[0] for call in colab.call_args_list], ['status', 'new'])
             self.assertEqual(colab.call_args_list[-1].args,
-                             ('new', '-s', 'strata-glm', '--gpu', 'A100', '--high-mem'))
+                             ('new', '-s', 'glm53-a100', '--gpu', 'A100', '--high-mem'))
             record = json.loads((Path(directory) / 'allocation-error.json').read_text())
             self.assertEqual(record['reason'], 'service_unavailable')
             self.assertFalse((Path(directory) / 'session.json').exists())
@@ -594,8 +594,8 @@ class LifecycleTests(unittest.TestCase):
                  patch.object(sys.stdin, 'isatty', return_value=True), \
                  patch.object(instance, 'allocate'), \
                  patch.object(instance, 'colab') as colab, \
-                 patch.object(instance, 'run', return_value='STRATA_DRIVE_RESULT={"mounted": false, "logs": []}'), \
-                 patch.object(instance, 'code', return_value='STRATA_DRIVE=false') as code, \
+                 patch.object(instance, 'run', return_value='GLM_DRIVE_RESULT={"mounted": false, "logs": []}'), \
+                 patch.object(instance, 'code', return_value='GLM_DRIVE=false') as code, \
                  patch.object(session, 'colab_interpreter', return_value=[sys.executable]), \
                  contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(RuntimeError, 'GDrive'):
@@ -652,7 +652,7 @@ class LifecycleTests(unittest.TestCase):
             values = [command[i + 1] for i, value in enumerate(command) if value == '-c']
             settings = tomllib.loads('\n'.join(values))
             self.assertEqual(settings['model'], profile['model'], name)
-            provider = settings['model_providers']['strata_glm']
+            provider = settings['model_providers']['glm53_colab']
             self.assertEqual(provider['wire_api'], 'responses', name)
             self.assertEqual(provider['base_url'], 'http://127.0.0.1:8086/v1', name)
             self.assertEqual(provider['name'], profile['provider_name'], name)
@@ -676,7 +676,7 @@ class DriveHelperTests(unittest.TestCase):
         current = SimpleNamespace(kernel_id='existing-kernel', session_id='existing-session')
         state = SimpleNamespace(get_session=Mock(return_value=current), store=Mock())
         factory = Mock()
-        mount_helper.attached_runtime(factory, state, 'url', 'token', session_name='strata-glm')
+        mount_helper.attached_runtime(factory, state, 'url', 'token', session_name='glm53-a100')
         kwargs = factory.call_args.kwargs
         self.assertEqual(kwargs['kernel_id'], 'existing-kernel')
         self.assertEqual(kwargs['session_id'], 'existing-session')
@@ -700,8 +700,8 @@ class DriveHelperTests(unittest.TestCase):
         with patch.dict(sys.modules, {'google': google, 'google.colab': colab, 'google.colab.drive': drive}), \
              contextlib.redirect_stdout(output):
             exec(mount_helper.mount_code(), {})
-        line = next(line for line in output.getvalue().splitlines() if line.startswith('STRATA_DRIVE_RESULT='))
-        result = json.loads(line.removeprefix('STRATA_DRIVE_RESULT='))
+        line = next(line for line in output.getvalue().splitlines() if line.startswith('GLM_DRIVE_RESULT='))
+        result = json.loads(line.removeprefix('GLM_DRIVE_RESULT='))
         self.assertEqual(result['mount_error_type'], 'ValueError')
         self.assertIn('logs', result)
 

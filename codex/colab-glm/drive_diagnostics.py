@@ -53,4 +53,4 @@ def collect():
 
 
 if __name__ == '__main__':
-    print('STRATA_DRIVE_DIAGNOSTICS=' + json.dumps(collect()))
+    print('GLM_DRIVE_DIAGNOSTICS=' + json.dumps(collect()))

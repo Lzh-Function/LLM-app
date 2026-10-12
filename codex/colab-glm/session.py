@@ -22,12 +22,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 STATE = HERE / '.runtime'
-SESSION = 'strata-glm'
+SESSION = 'glm53-a100'
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def say(message):
-    print('[strata-glm]', message, flush=True)
+    print('[glm53-a100]', message, flush=True)
 
 
 def manifest():
@@ -129,16 +129,16 @@ def catalog(context, profile):
 
 def codex_command(port, context, arguments, profile):
     settings = {
-        'model': profile['model'], 'model_provider': 'strata_glm',
+        'model': profile['model'], 'model_provider': 'glm53_colab',
         'model_catalog_json': str(STATE / 'models.json'),
         'model_context_window': context, 'model_auto_compact_token_limit': context * 3 // 4,
         'model_reasoning_effort': 'high', 'show_raw_agent_reasoning': True,
-        'model_providers.strata_glm.name': profile['provider_name'],
-        'model_providers.strata_glm.base_url': f'http://127.0.0.1:{port}/v1',
-        'model_providers.strata_glm.wire_api': 'responses',
-        'model_providers.strata_glm.requires_openai_auth': False,
-        'model_providers.strata_glm.supports_websockets': False,
-        'model_providers.strata_glm.stream_idle_timeout_ms': 600000,
+        'model_providers.glm53_colab.name': profile['provider_name'],
+        'model_providers.glm53_colab.base_url': f'http://127.0.0.1:{port}/v1',
+        'model_providers.glm53_colab.wire_api': 'responses',
+        'model_providers.glm53_colab.requires_openai_auth': False,
+        'model_providers.glm53_colab.supports_websockets': False,
+        'model_providers.glm53_colab.stream_idle_timeout_ms': 600000,
         'features.apps': False, 'features.multi_agent': False,
         'sandbox_mode': 'workspace-write', 'sandbox_workspace_write.network_access': True,
     }
@@ -165,7 +165,7 @@ class Session:
         self.owned = False
         self.drive_mounted = False
         self.master = None
-        self.socket = f'/tmp/strata-glm-{os.getuid()}-{uuid.uuid4().hex[:12]}.sock'
+        self.socket = f'/tmp/glm53-a100-{os.getuid()}-{uuid.uuid4().hex[:12]}.sock'
 
     def run(self, command, *, timeout=None, stream_output=False, progress=None, **kwargs):
         process = subprocess.Popen(command, **kwargs)
@@ -237,9 +237,9 @@ class Session:
     def code(self, code, *, quiet=False, timeout=60, progress=None):
         # colab-cli can exit 0 even when the notebook raises an exception.
         # Only a marker printed AFTER executing the entire script proves success.
-        marker = 'STRATA_EXEC_OK_' + uuid.uuid4().hex
+        marker = 'GLM_EXEC_OK_' + uuid.uuid4().hex
         path = STATE / 'execute.py'
-        path.write_text(f'exec(compile({code!r}, "strata-setup", "exec"))\nprint({marker!r})\n')
+        path.write_text(f'exec(compile({code!r}, "glm-setup", "exec"))\nprint({marker!r})\n')
         output = self.colab('exec', '-s', SESSION, '-f', str(path), '--timeout', str(max(1, timeout - 5)),
                             timeout=timeout, progress=progress,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -300,14 +300,14 @@ class Session:
         self.run([sys.executable, '-c', 'input()'], timeout=300)
         say('GDriveを確認します（最大20秒）。')
         output = self.code(probe, quiet=True, timeout=20)
-        if 'STRATA_DRIVE=true' not in output.splitlines():
+        if 'GLM_DRIVE=true' not in output.splitlines():
             raise RuntimeError('Drive mount failed')
 
     def mount_drive(self):
-        probe = "import os, json\nprint('STRATA_DRIVE=' + json.dumps(os.path.ismount('/content/drive') and os.path.isdir('/content/drive/MyDrive')))\n"
+        probe = "import os, json\nprint('GLM_DRIVE=' + json.dumps(os.path.ismount('/content/drive') and os.path.isdir('/content/drive/MyDrive')))\n"
         say('GDriveのマウント状態を確認します（最大20秒）。')
         output = self.code(probe, quiet=True, timeout=20)
-        if 'STRATA_DRIVE=true' in output.splitlines():
+        if 'GLM_DRIVE=true' in output.splitlines():
             self.drive_mounted = True
             return
         if not sys.stdin.isatty():
@@ -322,8 +322,8 @@ class Session:
             output = self.run([*colab_interpreter(), str(HERE / 'mount_helper.py'), '-s', SESSION],
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                               stream_output=True, timeout=300)
-            records = [line.removeprefix('STRATA_DRIVE_RESULT=') for line in output.splitlines()
-                       if line.startswith('STRATA_DRIVE_RESULT=')]
+            records = [line.removeprefix('GLM_DRIVE_RESULT=') for line in output.splitlines()
+                       if line.startswith('GLM_DRIVE_RESULT=')]
             info = json.loads(records[-1]) if records else None
             if not info or not info.get('mounted') or not info.get('mydrive_exists') or info.get('mount_error_type'):
                 if info:
@@ -352,7 +352,7 @@ class Session:
     def start(self):
         remote_port = manifest()['server_port']
         if not isinstance(remote_port, int) or not 1 <= remote_port <= 65535 or remote_port == 8080:
-            raise RuntimeError('manifest must select a dedicated remote Strata port, not Colab port 8080.')
+            raise RuntimeError('manifest must select a dedicated remote GLM port, not Colab port 8080.')
         for tool in ('colab', 'ssh', 'ssh-keygen', 'codex'):
             if not shutil.which(tool):
                 raise RuntimeError(f'{tool} is required.')
@@ -363,17 +363,17 @@ class Session:
             self.run(['ssh-keygen', '-t', 'ed25519', '-N', '', '-f', str(identity), '-q'])
         self.allocate()
         self.mount_drive()
-        self.code("from pathlib import Path\nimport os\nassert os.path.ismount('/content/drive') and Path('/content/drive/MyDrive').is_dir(), 'Drive mount failed'\nPath('/content/strata-glm').mkdir(exist_ok=True)\n")
+        self.code("from pathlib import Path\nimport os\nassert os.path.ismount('/content/drive') and Path('/content/drive/MyDrive').is_dir(), 'Drive mount failed'\nPath('/content/glm53-a100').mkdir(exist_ok=True)\n")
         for name in ('remote.py', 'manifest.json'):
-            self.colab('upload', '-s', SESSION, str(HERE / name), 'content/strata-glm/' + name, timeout=45)
-        remote_args = ['python3', '-u', '/content/strata-glm/remote.py', '--data-dir', self.args.data_dir,
+            self.colab('upload', '-s', SESSION, str(HERE / name), 'content/glm53-a100/' + name, timeout=45)
+        remote_args = ['python3', '-u', '/content/glm53-a100/remote.py', '--data-dir', self.args.data_dir,
                        '--context', str(self.args.context), '--variant', self.variant]
         if self.args.reverify:
             remote_args.append('--reverify')
         self.code('import subprocess\nfrom pathlib import Path\n'
-                  "log=open('/content/strata-glm/bootstrap.log','ab',buffering=0)\n"
+                  "log=open('/content/glm53-a100/bootstrap.log','ab',buffering=0)\n"
                   f'p=subprocess.Popen({remote_args!r},stdout=log,stderr=log,start_new_session=True)\n'
-                  "Path('/content/strata-glm/bootstrap.pid').write_text(str(p.pid))\nprint('BOOTSTRAP_PID',p.pid)\n")
+                  "Path('/content/glm53-a100/bootstrap.pid').write_text(str(p.pid))\nprint('BOOTSTRAP_PID',p.pid)\n")
         proxy = shlex.join(['colab', 'ssh', '--proxy-mode', '-s', SESSION, '--identity', str(identity)])
         ssh_log = (STATE / 'ssh.log').open('ab', buffering=0)
         command = ['ssh', '-M', '-S', self.socket, '-N', '-i', str(identity),
@@ -381,7 +381,7 @@ class Session:
                    '-o', 'ServerAliveInterval=10', '-o', 'ServerAliveCountMax=3',
                    '-o', 'ExitOnForwardFailure=yes', '-o', 'StrictHostKeyChecking=accept-new',
                    '-o', f'UserKnownHostsFile={STATE / "known_hosts"}',
-                   '-o', 'HostKeyAlias=strata-glm-' + uuid.uuid4().hex,
+                   '-o', 'HostKeyAlias=glm53-a100-' + uuid.uuid4().hex,
                    '-o', 'ProxyCommand=' + proxy,
                    '-L', f'127.0.0.1:{self.args.port}:127.0.0.1:{remote_port}', 'root@colab-runtime']
         self.master = subprocess.Popen(command, stdout=ssh_log, stderr=ssh_log, start_new_session=True)
@@ -396,15 +396,15 @@ class Session:
                 say(f'準備完了: http://127.0.0.1:{self.args.port}/v1 ({self.variant})')
                 return
             if Path(self.socket).exists():
-                tail = self.ssh("tail -n 4 /content/strata-glm/bootstrap.log; "
-                                "pid=$(cat /content/strata-glm/bootstrap.pid); state=$(ps -o stat= -p \"$pid\"); "
-                                "case \"$state\" in ''|Z*) echo STRATA_BOOTSTRAP_FAILED;; esac; "
-                                "if test -f /content/strata-glm/failed; then echo STRATA_BOOTSTRAP_FAILED; fi")
+                tail = self.ssh("tail -n 4 /content/glm53-a100/bootstrap.log; "
+                                "pid=$(cat /content/glm53-a100/bootstrap.pid); state=$(ps -o stat= -p \"$pid\"); "
+                                "case \"$state\" in ''|Z*) echo GLM_BOOTSTRAP_FAILED;; esac; "
+                                "if test -f /content/glm53-a100/failed; then echo GLM_BOOTSTRAP_FAILED; fi")
                 if tail != last_tail:
                     print(tail.rstrip(), flush=True)
                     last_tail = tail
-                if 'STRATA_BOOTSTRAP_FAILED' in tail:
-                    full = self.ssh('tail -n 80 /content/strata-glm/bootstrap.log')
+                if 'GLM_BOOTSTRAP_FAILED' in tail:
+                    full = self.ssh('tail -n 80 /content/glm53-a100/bootstrap.log')
                     (STATE / 'bootstrap-error.log').write_text(full)
                     raise RuntimeError(f'Bootstrap failed. See {STATE / "bootstrap-error.log"}')
             time.sleep(5)
@@ -415,13 +415,13 @@ class Session:
         seconds = max(1, int(minutes * 60))
         say(f'GDriveの未同期データを同期してから停止します（最大{minutes:g}分）。')
         helper = (HERE / 'shutdown_remote.py').read_text()
-        code = (f'ns={{"__name__":"strata_shutdown"}}\nexec(compile({helper!r}, "strata-shutdown", "exec"), ns)\n'
-                f'result=ns["shutdown"]({seconds})\nprint("STRATA_DRIVE_SYNC=" + result)\n')
+        code = (f'ns={{"__name__":"glm_shutdown"}}\nexec(compile({helper!r}, "glm-shutdown", "exec"), ns)\n'
+                f'result=ns["shutdown"]({seconds})\nprint("GLM_DRIVE_SYNC=" + result)\n')
         record = {'time_unix': time.time(), 'timeout_seconds': seconds, 'confirmed': False}
         try:
             output = self.code(code, quiet=True, timeout=seconds + 30,
                                progress='GDriveの同期完了を待っています。同期中もruntimeは稼働しています。')
-            if 'STRATA_DRIVE_SYNC=flushed' not in output.splitlines():
+            if 'GLM_DRIVE_SYNC=flushed' not in output.splitlines():
                 raise RuntimeError('Drive was not mounted; cloud sync could not be confirmed.')
             record['confirmed'] = True
             self.drive_mounted = False
@@ -463,7 +463,7 @@ def stop_runtime():
     result = subprocess.run(['colab', 'status', '-s', SESSION], check=True,
                             capture_output=True, text=True, timeout=60)
     if f"Session '{SESSION}' not found." not in result.stdout:
-        raise RuntimeError('Runtime stop could not be confirmed. Run colab stop -s strata-glm manually.')
+        raise RuntimeError('Runtime stop could not be confirmed. Run colab stop -s glm53-a100 manually.')
     say('runtime停止を確認しました。')
 
 
@@ -499,7 +499,7 @@ def main():
     parser.add_argument('command', choices=['start', 'stop', 'codex', 'client', 'status', 'doctor', 'check-drive'])
     parser.add_argument('--port', type=int, default=8086)
     parser.add_argument('--context', type=int, help='Context length; the options differ per variant (see manifest.json)')
-    parser.add_argument('--data-dir', default='/content/drive/MyDrive/Strata-data/glm53')
+    parser.add_argument('--data-dir', default='/content/drive/MyDrive/GLM53-data')
     parser.add_argument('--variant', help='Model variant: flash / flash-uncensored / full (default from manifest.json)')
     parser.add_argument('--max-hours', type=float, default=6.0, help='Hard runtime lifetime, including setup (default 6 hours)')
     parser.add_argument('--startup-minutes', type=float, default=240.0,
@@ -594,7 +594,7 @@ def main():
         try:
             sync_confirmed = session.close()
         except Exception:
-            say('自動停止を確認できません。colab stop -s strata-glm を実行してください。')
+            say('自動停止を確認できません。colab stop -s glm53-a100 を実行してください。')
             raise
         else:
             state_path.unlink(missing_ok=True)

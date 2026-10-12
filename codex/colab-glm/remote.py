@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-WORK = Path('/content/strata-glm')
+WORK = Path('/content/glm53-a100')
 DRIVE = Path('/content/drive')
 MIN_RAM_KIB = 150 * 1024 * 1024
 
@@ -43,7 +43,7 @@ def digest(path):
 
 def ensure_drive(data):
     if not DRIVE.is_mount() or not (DRIVE / 'MyDrive').is_dir():
-        raise RuntimeError('GDrive is not mounted. Run colab drivemount -s strata-glm in your terminal.')
+        raise RuntimeError('GDrive is not mounted. Run colab drivemount -s glm53-a100 in your terminal.')
     data = data.resolve()
     if not data.is_relative_to((DRIVE / 'MyDrive').resolve()):
         raise RuntimeError('Model destination must be inside /content/drive/MyDrive; SSD fallback is disabled.')
@@ -56,12 +56,12 @@ def ensure_drive(data):
 
 def check_server_port(port):
     if not isinstance(port, int) or not 1 <= port <= 65535 or port == 8080:
-        raise RuntimeError('Use a dedicated Strata port, not Colab/Jupyter port 8080.')
+        raise RuntimeError('Use a dedicated GLM port, not Colab/Jupyter port 8080.')
     try:
         with socket.socket() as stream:
             stream.bind(('127.0.0.1', port))
     except OSError as exc:
-        raise RuntimeError(f'Strata port {port} is unavailable; refusing to build/download first.') from exc
+        raise RuntimeError(f'GLM port {port} is unavailable; refusing to build/download first.') from exc
 
 
 def select_variant(manifest, requested):
@@ -307,7 +307,7 @@ def check_ram():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data-dir', default='/content/drive/MyDrive/Strata-data/glm53')
+    parser.add_argument('--data-dir', default='/content/drive/MyDrive/GLM53-data')
     parser.add_argument('--context', type=int)
     parser.add_argument('--variant')
     parser.add_argument('--reverify', action='store_true')

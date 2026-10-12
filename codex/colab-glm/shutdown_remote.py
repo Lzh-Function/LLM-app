@@ -1,10 +1,10 @@
-"""Stop the owned Strata process group, then flush Drive before releasing its VM."""
+"""Stop the owned GLM process group, then flush Drive before releasing its VM."""
 import os
 import signal
 import time
 from pathlib import Path
 
-WORK = Path('/content/strata-glm')
+WORK = Path('/content/glm53-a100')
 
 
 def stop_bootstrap():

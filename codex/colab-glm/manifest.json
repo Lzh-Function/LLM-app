@@ -9,7 +9,7 @@
     "flash": {
       "model": "glm-5.3-flash-maya-l",
       "display_name": "GLM-5.3-Flash Maya-L IQ3_S (Colab A100)",
-      "provider_name": "Strata GLM Colab A100 Maya-L",
+      "provider_name": "GLM-5.3 Colab A100 Maya-L",
       "engine": "maya",
       "contexts": [32768, 65536, 131072],
       "default_context": 131072,
@@ -61,7 +61,7 @@
     "flash-uncensored": {
       "model": "glm-5.3-flash-uncensored-iq3_xxs",
       "display_name": "GLM-5.3-Flash IQ3_XXS uncensored (Colab A100)",
-      "provider_name": "Strata GLM Colab A100 Flash uncensored",
+      "provider_name": "GLM-5.3 Colab A100 Flash uncensored",
       "engine": "llama",
       "contexts": [32768, 65536, 131072],
       "default_context": 131072,
@@ -100,7 +100,7 @@
     "full": {
       "model": "glm-5.3-slim-e192",
       "display_name": "GLM-5.3 SLIM-E192 Q2 (Colab A100)",
-      "provider_name": "Strata GLM Colab A100 SLIM-E192",
+      "provider_name": "GLM-5.3 Colab A100 SLIM-E192",
       "engine": "llama",
       "contexts": [32768, 65536],
       "default_context": 65536,

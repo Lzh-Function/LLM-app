@@ -6,16 +6,16 @@ def mount_code():
     diagnostics = Path(__file__).with_name('drive_diagnostics.py').read_text()
     return (
         'import json, os\nfrom google.colab import drive\n'
-        'strata_mount_error = None\n'
+        'glm_mount_error = None\n'
         'try:\n    drive.mount("/content/drive")\n'
         'except Exception as exc:\n'
-        '    strata_mount_error = type(exc).__name__\n'
-        '    print("[strata-glm] Driveマウント失敗。診断を取得します。", flush=True)\n'
-        'strata_diagnostics = {"__name__": "strata_drive_diagnostics"}\n'
-        f'exec(compile({diagnostics!r}, "drive-diagnostics", "exec"), strata_diagnostics)\n'
-        'strata_info = strata_diagnostics["collect"]()\n'
-        'strata_info["mount_error_type"] = strata_mount_error\n'
-        'print("STRATA_DRIVE_RESULT=" + json.dumps(strata_info), flush=True)\n'
+        '    glm_mount_error = type(exc).__name__\n'
+        '    print("[glm53-a100] Driveマウント失敗。診断を取得します。", flush=True)\n'
+        'glm_diagnostics = {"__name__": "glm_drive_diagnostics"}\n'
+        f'exec(compile({diagnostics!r}, "drive-diagnostics", "exec"), glm_diagnostics)\n'
+        'glm_info = glm_diagnostics["collect"]()\n'
+        'glm_info["mount_error_type"] = glm_mount_error\n'
+        'print("GLM_DRIVE_RESULT=" + json.dumps(glm_info), flush=True)\n'
     )
 
 
