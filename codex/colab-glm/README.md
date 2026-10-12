@@ -2,7 +2,7 @@
 
 GLM-5.3／GLM-5.3-Flashを、ColabのA100 high-memで実行する。
 起動時に**3変種**から選び、それぞれエンジンが異なる（`flash`はProject Maya、他2つはllama.cpp）。
-重み・Mayaのpack・ビルド済みエンジンはGDriveの `MyDrive/Strata-data/glm53/` に保存する。
+重み・Mayaのpack・ビルド済みエンジンはGDriveの `MyDrive/GLM53-data/` に保存する（Qwenの `MyDrive/Strata-data/` とは別フォルダ）。
 GGUFをローカルPCやColabの `/content` へコピーしない。ソース、Python環境、ビルドの作業ファイルだけをColabの一時ディスクに置く。
 SSHでAPIをローカルの `127.0.0.1:8086` へ転送する。サーバー側は専用の `127.0.0.1:18081` のみで待ち受ける。
 ColabのJupyterが使う8080番との競合を避け、ビルド・取得より前にポートの空きを確認する。
@@ -43,7 +43,7 @@ cd /workspace/LLM
 この1コマンドが runtime作成→GDriveマウント・認証→ソース取得→**エンジンビルド（sm_80）**→GGUFダウンロード・SHA-256検証→（Mayaは）pack生成→サーバー起動→Codex起動を行う。
 `flash` の初回は Maya のエンジンコンパイルと pack 生成（全テンソルのインデックスと小さなfloat重み・tokenizerで1〜2GB。expertはGGUFに残る）が加わり、`flash-uncensored`／`full` は llama-server のビルドになる。
 初回準備の待機上限は既定240分、runtime全体の上限は6時間。必要なら `--startup-minutes 300 --max-hours 8` で変える。
-**Codexを終了するとSSH接続とモデルを終了し、GDriveの同期完了を待ってから `colab stop -s strata-glm` を実行する。**
+**Codexを終了するとSSH接続とモデルを終了し、GDriveの同期完了を待ってから `colab stop -s glm53-a100` を実行する。**
 同期待ちは既定で最大10分。初回の約150GBの書き込みに長めの時間を確保するなら `--flush-minutes 30`。
 
 ## 2回目以降はDriveのキャッシュを使う
@@ -51,7 +51,7 @@ cd /workspace/LLM
 初回に作ったものは、変種・エンジンごとにDriveへ保存し、次回以降は再取得・再ビルドしない。
 
 ```
-MyDrive/Strata-data/glm53/
+MyDrive/GLM53-data/
 ├── models/Maya-L/            Maya-L 4分割と、Mayaが生成する pack/（Maya自身の配置）
 ├── models/bolding-iq3_xxs/   IQ3_XXS 3分割
 ├── models/slim-e192/         SLIM-E192 4分割
@@ -82,14 +82,14 @@ curl http://127.0.0.1:8086/v1/responses \
 # セッション終了。サーバー、トンネル、Colab runtimeを終了する。
 ./colab-glm stop
 # 緊急時は直接:
-colab stop -s strata-glm
+colab stop -s glm53-a100
 ```
 
 `/v1/responses` はMaya・llama.cppの両方が本体で提供する。変換層は置いていない。
 `start`のターミナルでCtrl+Cを押しても、GDrive同期待ちを経てruntimeをstopする。
 `client`の終了だけでは共有runtimeを止めないため、最後に `stop` する。`codex`モードではCodex終了時に自動でstopする。
 起動失敗、SSH切断、SIGTERM/SIGHUP、時間上限でも、マウント済みなら同期を試みてから停止する。
-既存の `strata-glm` があると新規起動は拒否する。
+既存の `glm53-a100` があると新規起動は拒否する。
 
 ```bash
 ./colab-glm doctor                    # ローカル依存とCodexカタログの確認。runtimeを作成しない。
@@ -102,7 +102,7 @@ colab stop -s strata-glm
 
 ## 設定と保存先
 
-- runtime起動は `colab new -s strata-glm --gpu A100 --high-mem`。A100（sm_80）とRAM 150GiB以上を検査し、違えばビルド・取得前に失敗する。
+- runtime起動は `colab new -s glm53-a100 --gpu A100 --high-mem`。A100（sm_80）とRAM 150GiB以上を検査し、違えばビルド・取得前に失敗する。
 - Project Maya v1.1.1 commit `eb9b7ec88d6f7802f15b218b551550f749c7a94a`、llama.cpp commit `efe3626b119ff81033e309c3ba07a770bef2c546`、Mayaが使うllama.cpp commit `3cf03257f219afbe7334045ff7c6a06ac68c627d` を固定。
 - GGUFはrevision・サイズ・SHA-256で固定。分割GGUFは最初のshardを `-m` に渡し、兄弟shardは同じフォルダから読む。
 - `flash` は `STRATA_GLM_RAM_RESIDENT=1 STRATA_GLM_KV_INT8=1 STRATA_GLM_RAM_HEADROOM_GB=16`、draftingはモデル自身のMTP block、`--no-vision` で画像エンコーダー（mmproj）の取得とビルドを省略。
@@ -111,7 +111,7 @@ colab stop -s strata-glm
 - 変種ごとの `model` 名・エンジン・context選択肢・ファイル一覧は `manifest.json` の `variants` に置き、`default_variant` が既定になる。
 - [公式Codex provider設定](https://learn.chatgpt.com/docs/config-file/config-reference)に従いResponses APIを使用。専用モデルカタログとCLIオーバーライドを使い、通常のCodex設定は書き換えない。
 - ローカル: `codex/colab-glm/.runtime/` にSSH鍵、接続ログ、専用カタログ、`drive-sync-status.json`。git対象外、権限700。
-- Colab内: `/content/strata-glm/bootstrap.log` にビルド・取得・サーバーのログ。準備失敗時は末尾をローカルの `.runtime/bootstrap-error.log` に保存する。
+- Colab内: `/content/glm53-a100/bootstrap.log` にビルド・取得・サーバーのログ。準備失敗時は末尾をローカルの `.runtime/bootstrap-error.log` に保存する。
 
 保存先を変える場合は `--data-dir /content/drive/MyDrive/任意のフォルダ`。MyDriveの外や未マウントのディレクトリは拒否し、一時SSDへのモデル保存に切り替えない。
 

@@ -86,7 +86,7 @@ Flashは **131072**。KV cacheが1.13〜1.78GiBしか食わず、Mayaの選択�
 ```bash
 STRATA_GLM_RAM_RESIDENT=1 STRATA_GLM_KV_INT8=1 STRATA_GLM_RAM_HEADROOM_GB=16 \
   python3 maya.py --yes --model Maya-L --context 131072 --no-vision \
-  --models-dir /content/drive/MyDrive/Strata-data/glm53/models --port 18081 --host 127.0.0.1
+  --models-dir /content/drive/MyDrive/GLM53-data/models --port 18081 --host 127.0.0.1
 ```
 
 - `STRATA_GLM_RAM_RESIDENT=1` はVRAMに載らない全expertをRAM tierに置き、収まらなければ起動に失敗する設定。推論中にディスク／Driveへexpertを読みに行かない構成にできる。[SETTINGS.md](https://github.com/mw00/project-maya/blob/eb9b7ec88d6f7802f15b218b551550f749c7a94a/docs/SETTINGS.md)
@@ -170,11 +170,11 @@ dd if="/content/drive/MyDrive/Strata-data/models/IQ3_S/..." of=/dev/null bs=16M 
 
 ## 実装（`colab-glm`）
 
-[codex/colab-qwen](../codex/colab-qwen) の作りを踏襲する。`manifest.json` に `variants` と `default_variant` を置き、`--variant` で起動時に選び、未取得分だけを初回にDriveへダウンロードしてSHA-256で検証する。保存先は `/content/drive/MyDrive/Strata-data/glm53/` に変種別フォルダを分ける。
+[codex/colab-qwen](../codex/colab-qwen) の作りを踏襲する。`manifest.json` に `variants` と `default_variant` を置き、`--variant` で起動時に選び、未取得分だけを初回にDriveへダウンロードしてSHA-256で検証する。保存先はQwenの `MyDrive/Strata-data/` とは別の `/content/drive/MyDrive/GLM53-data/` にし、その中で変種別フォルダを分ける。
 エンジンはMayaとllama.cppの2系統で、ビルド済み成果物もDriveにキャッシュする。
 
 ```
-MyDrive/Strata-data/glm53/
+MyDrive/GLM53-data/
 ├── models/Maya-L/            Maya-L 4分割（145.58GiB）と pack/
 ├── models/bolding-iq3_xxs/   IQ3_XXS 3分割（125.08GiB）
 ├── models/slim-e192/         SLIM-E192 4分割（149.72GiB）
