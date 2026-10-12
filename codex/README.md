@@ -1,5 +1,9 @@
 # Codex with local Flash Next / Qwen3.5-9B / Bonsai 2
 
+Colab A100 high-mem + GDriveのIQ3_Sは、`/workspace/LLM/colab-qwen codex`で起動から終了時のruntime停止まで行う。
+初回は自分のターミナルでGDriveのブラウザ認証を行う。個別の起動・停止は `colab-qwen start` / `colab-qwen stop`。
+[Colab版の手順と確認状況](colab-qwen/README.md)を参照。
+
 ```bash
 cd /workspace/LLM
 uv run codex/setup.py

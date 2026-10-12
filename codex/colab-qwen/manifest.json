@@ -1,0 +1,57 @@
+{
+  "strata_commit": "7695859aa13afb248bdb4d36f9b2e95707db079d",
+  "strata_version": "0.1.43",
+  "llama_commit": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
+  "model": "qwen3.8-flash-next-iq3_s",
+  "server_port": 18080,
+  "files": [
+    {
+      "repo": "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF",
+      "revision": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",
+      "source": "IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+      "destination": "models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+      "size": 54817524224,
+      "sha256": "4c1eb2ceb4915e1192f4f386021897bde56a97f40a0bb78bb86465e0f7d2aca3"
+    },
+    {
+      "repo": "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF",
+      "revision": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",
+      "source": "IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+      "destination": "models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+      "size": 28800138432,
+      "sha256": "316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
+    },
+    {
+      "repo": "SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF",
+      "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
+      "source": "strata/rt/dense.bin",
+      "destination": "mtp/rt/dense.bin",
+      "size": 116099072,
+      "sha256": "c724dc0b0822ada5d2977bf5bde821605feabaa64ea2e0045b67ca656329070a"
+    },
+    {
+      "repo": "SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF",
+      "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
+      "source": "strata/rt/experts.bin",
+      "destination": "mtp/rt/experts.bin",
+      "size": 707788800,
+      "sha256": "09398406be61f1f54c93861f449e48b8df0bfccbc9ec9b2b7636775a6ea9244f"
+    },
+    {
+      "repo": "SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF",
+      "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
+      "source": "strata/rt/dense.txt",
+      "destination": "mtp/rt/dense.txt",
+      "size": 1880,
+      "sha256": "8773c81ebb0986e37fe94a8a9933e87be48b1fabc6889a0106bcdab179d1c2ac"
+    },
+    {
+      "repo": "SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF",
+      "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
+      "source": "strata/rt/draft_vocab.bin",
+      "destination": "mtp/rt/draft_vocab.bin",
+      "size": 425196,
+      "sha256": "b1e1d3a7a9e4bf862dcd5923ce661fb59bbd07907e594df5cf86a62ac235cb91"
+    }
+  ]
+}
