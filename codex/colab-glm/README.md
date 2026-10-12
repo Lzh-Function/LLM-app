@@ -66,6 +66,18 @@ MyDrive/GLM53-data/
 - 復元した Maya の `build/strata` と `MAYA-BUILD.json` は、Maya自身のstamp検査を通るため、一致すればコンパイルを飛ばす。
 - ソース（llama.cpp、project-maya、Mayaが使うllama.cpp）と `.venv` はColabの一時ディスクに置く。runtimeごとに作り直す。
 
+## 準備だけまとめて行う
+
+```bash
+./colab-glm prepare                  # 3変種すべて: 重み取得 + 2エンジンビルド + Mayaのpack
+./colab-glm prepare --variant full   # 1変種だけ。この場合のみ --context を指定できる
+```
+
+サーバーもCodexも起動しない。runtime作成→GDriveマウント→変種ごとの空き容量確認→GGUF取得・SHA-256検証→エンジンビルド→（`flash` は）pack生成までを1runtimeで済ませ、完了後にGDriveを同期して停止する。
+contextは各変種の既定値（`flash`／`flash-uncensored` は131072、`full` は65536）を使い、`--context` は `--variant` を1つに絞った時だけ受け付ける。
+待機上限は既定480分、runtime全体は10時間、GDrive同期待ちは30分（`prepare` 専用の既定値。`--startup-minutes`・`--max-hours`・`--flush-minutes` で変更可）。
+完了は `bootstrap.log` の `GLM_PREPARE_COMPLETE ["flash", "flash-uncensored", "full"]` で分かる。以後の `start`／`codex` はキャッシュを使うだけになり、初回の待ち時間がサーバーを待つ時間から消える。
+
 ## 起動・終了を分ける
 
 ```bash
@@ -117,10 +129,12 @@ colab stop -s glm53-a100
 
 ## 実装の確認状況
 
-`python3 codex/colab-glm/test_framework.py` で53件が通過。
+`python3 codex/colab-glm/test_framework.py` で57件が通過。
 再開ダウンロード、SHA-256不一致、変更済みキャッシュ、Drive保存制約、空き容量、ポート競合、A100/RAMの検査、
 変種とcontextの選択（未知の値をビルド・取得前に拒否）、エンジンキャッシュキーの分離、
 llama-serverのsm_80ビルドとDriveキャッシュの復元・保存、Mayaのengine restore/saveとconfigの `model_name` 上書き、
 両エンジンの起動コマンド（shard・`--alias`・port・context・`--config`）、healthの `/health` + `/props` 判定（ロード中の `max_context 0` を未準備扱い）、
-トンネルのポート、`--variant` のColab側起動コマンドへの伝達、同期→停止の順序と失敗時の停止までを検証した。
+トンネルのポート、`--variant` のColab側起動コマンドへの伝達、同期→停止の順序と失敗時の停止、
+`prepare` が全変種の取得と両エンジン生成を exec なしで終えること（単一変種指定では他変種に触れないこと、
+port forward とCodex検査を飛ばすこと）までを検証した。
 **Colab上での実ダウンロード、エンジンビルド、推論とCodexの実ツール呼び出しは未実施。**

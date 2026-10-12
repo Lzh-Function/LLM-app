@@ -7,6 +7,7 @@ Colab A100 high-mem + GDriveのIQ3_Sは、`/workspace/LLM/colab-qwen codex`で�
 
 GLM-5.3／Flashは `/workspace/LLM/colab-glm codex` で同じ手順で起動する。既定は `flash`（Project Maya）、無検閲Flashは `--variant flash-uncensored`、通常版GLM-5.3は `--variant full`。
 重みだけでなくビルド済みのA100エンジンもGDriveにキャッシュし、2回目以降は再ビルドしない。
+サーバーを起動せずに3変種分のダウンロードとエンジンビルドだけまとめて済ませるなら `colab-glm prepare`。
 [Colab GLM版の手順と確認状況](colab-glm/README.md)を参照。
 
 ```bash

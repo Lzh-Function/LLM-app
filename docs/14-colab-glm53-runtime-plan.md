@@ -187,6 +187,8 @@ MyDrive/GLM53-data/
 `<sig>` はエンジン種別・固定commit・nvccのパスとバージョン・libc・CPU flagsのSHA-256先頭20桁。ColabのCUDAツールキットが変わった時だけ再ビルドになる。Maya側は `build/strata` と `MAYA-BUILD.json` をそのまま復元し、Maya自身のstamp検査（source hashとarchs）を通す。
 llama.cppは `cmake -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=80` で `llama-server` だけを作り、Mayaは `maya.py --yes --no-start` でセットアップした後に `--config` で起動する2段構えにする（`--no-start` だけだとdashboard起動を飛ばせないため）。
 Qwenのruntimeと同じく、保存先はDrive内のみ（SSDフォールバックなし）、ポート競合はビルド・ダウンロード前に失敗、失敗時はruntime stopまで行う、を維持する。
+`prepare` はサーバーを起動せず、`--variant` を省略すると3変種分（GGUFで約420GiB）の取得と2エンジンのビルド・Mayaのpack生成を1runtimeでDriveへキャッシュする。
+待機上限は `prepare` だけ480分、runtime 10時間、GDrive同期待ち30分の既定値。contextは各変種の既定値を使い、`--context` は単一変種の指定時に限る。
 
 **全変種をDriveに置くとGGUFだけで約420GiB**（145.58 + 125.08 + 149.72）。Qwen両変種（約167GB）とGLM 3変種を置いても約600GB級で、Driveの空きはこのruntimeの制約にならない。
 
