@@ -99,12 +99,41 @@ STRATA_GLM_RAM_RESIDENT=1 STRATA_GLM_KV_INT8=1 STRATA_GLM_RAM_HEADROOM_GB=16 \
 
 ```bash
 llama-server -m models/bolding-iq3_xxs/GLM-5.3-Flash-Uncensored-IQ3_XXS-00001-of-00003.gguf \
-  -ngl 99 -fa on -c 131072 -np 1 --host 127.0.0.1 --port 18080
+  -ngl 99 -cmoe --moe-cache-mib 32768 -fa on -c 131072 -np 1 \
+  --host 127.0.0.1 --port 18080
 ```
 
 `full` は `-c 65536`。MTPテンソルを含む配布ではspeculative decodeが使えるが、フラグ名は導入するllama.cppのビルドで確認する（#29928以降で変更されている）。配布者推奨のサンプリングは `--temp 0.7 --min-p 0.05`。2bit級ではgreedyで長い連鎖ループに入ることがあるため。
 
+**`-ngl 99` だけでは起動しない。** 両変種の重み（125.08GiB／149.72GiB）はVRAM 79.39GiBを超える。`-cmoe` は MoE expert 重みをCPU RAMに置くフラグで、`glm5-next` も `glm-dsa` もテンソル名が標準の `ffn_gate_exps`/`ffn_up_exps`/`ffn_down_exps` なのでそのまま効く。dense・attention・共有expertはVRAMに残る。`--moe-cache-mib` はCPU側expertのGPUキャッシュ（既定0）で、RAM帯域とPCIe往復を削るための値。`-ncmoe N`（先頭N層のexpertだけCPUへ）と合わせて、値はロード時のVRAM実測で決める。まず `--moe-cache-mib 0` で入り、空きVRAMを見て上げる。
+
 `flash-uncensored` をMayaで動かす経路（`--gguf-dir`）は「動くがMayaは計測していない」と作者が明記しているexperimental扱い。まずllama.cppで測り、遅い場合にMaya側を試す。
+
+### autotrust配布の「DGX Spark向け」表記について
+
+リポジトリ名・ファイル名（`GLM-5.3-Q2-DGX-Spark-0000N-of-00004.gguf`）・READMEの肩書き（"packaged for DGX Spark owners"）にSparkが出る。ただし配布物はハードウェア非依存のGGUFで、Spark向けなのはREADMEのビルド手順と2台構成のレシピだけ。実ファイルをHTTP Rangeで直接読んでヘッダを確認した（revision `dc02b40`）。
+
+| 項目 | 実測値 |
+| --- | --- |
+| `general.architecture` | `glm-dsa` |
+| `general.basename` / `general.name` | `GLM-5.3-SLIM-E192` |
+| `block_count` / `expert_count` / `leading_dense_block_count` | 78 / 192 / 3 |
+| `context_length` | 1048576 |
+| テンソル型（shard 1） | Q8_0 ×262、F32 ×210、IQ2_XXS ×60 |
+| テンソル型（shard 4） | Q8_0 ×136、F32 ×109、IQ2_XXS ×37 |
+
+テンソル型は全て標準ggml型で、独自フォーマットは無い。README自身の "runs on upstream llama.cpp"、"Standard llama.cpp glm-dsa layout (same tensor names, MLA `attn_k_b`/`attn_v_b` split and metadata as llama.cpp's own GLM 5.2/5.3 conversions)" と一致する。
+
+Spark固有の要素と、A100での扱い:
+
+- `-DCMAKE_CUDA_ARCHITECTURES=121a-real` はGB10のarchフラグ。A100では `sm_80` でビルドする。
+- 2台Sparkの `rpc-server` / `--rpc` / `--tensor-split 1,1` は128GB×2に載せるための構成で、A100＋RAM167GiBでは不要。
+- llama.cpp側にSpark専用パスはあるが、A100ではコンパイル時に消えるだけ。[mmvq.cu](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-cuda/mmvq.cu) のL2プリフェッチは `#if __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK`（`common.cuh` で 1210）で囲まれ、コメントにも "only enabled on DGX Spark… On the higher-bandwidth parts the kernel has little exposed latency left to hide and the extra requests cost more than they save"。`cc == GGML_CUDA_CC_DGX_SPARK` のne11上限チューニングも、他archは汎用デフォルトに落ちる。
+- IQ2_XXSはMMVQで全arch対応（`get_vec_dot_q_cuda()` に `case GGML_TYPE_IQ2_XXS: return vec_dot_iq2_xxs_q8_1;`）。capabilityゲート（`fast_bf16_hardware_available`、`bf16_mma_hardware_available`、`ampere_mma_available`、`cp_async_available`）は `GGML_CUDA_CC_AMPERE = 800` 以上で成立するのでA100は通る。
+- `glm-dsa` はupstream本体にマージ済み（[#19460](https://github.com/ggml-org/llama.cpp/pull/19460) アーキ追加、[#24770](https://github.com/ggml-org/llama.cpp/pull/24770) indexerテンソル任意化、[#25980](https://github.com/ggml-org/llama.cpp/pull/25980) NextN/MTP spec-decode、[#26474](https://github.com/ggml-org/llama.cpp/pull/26474) indexer cache）。`src/models/glm-dsa.cpp` は標準の `ffn_gate_exps`/`ffn_up_exps`/`ffn_down_exps` を使うので、`-cmoe` / `-ncmoe` / `--moe-cache-mib` がそのまま効く。
+- A100でGLM-5系をGGUF＋llama.cppで動かす前例として [jimmylegendary/glm5-llamacpp-a100](https://github.com/jimmylegendary/glm5-llamacpp-a100) がある（8×A100＋1TB RAM前提、"upstream vLLM/SGLang sparse-MLA support is unreliable" な環境向け。方向性としては参考になるが、この構成とは桁が違う）。
+
+残るリスクは2つ。作者の実測は 2×DGX Spark / 1×DGX Spark（paging、低一桁t/s） / B200・GB200 / Mac Studio 256GB の4構成で、**A100やHopperのデータは無い**。そしてREADMEの「180GB GPUに常駐」はA100 80GBでは成立しないため、expertをRAMに置いてPCIe越しに読む構成になる。
 
 ## Colab runtimeで測る項目
 
