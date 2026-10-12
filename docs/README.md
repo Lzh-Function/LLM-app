@@ -75,6 +75,9 @@ Hikari07jp 版は v0.1 プレビュー。Bonsai 2 と Flash Next の思考切替
 11. [11-codex-bonsai.md](11-codex-bonsai.md) — BonsaiのCodex連携、96K設定、速度・メモリ・全文トレースの実測
 12. [12-codex-qwen-9b.md](12-codex-qwen-9b.md) — Qwen3.5-9BのCodex連携、128K設定、コンテキスト比較と実測
 
+13. [13-colab-glm53-research.md](13-colab-glm53-research.md) — GLM-5.3／Flashの通常版・無検閲版をColab A100で動かす調査、配布・量子化・エンジンの比較
+14. [14-colab-glm53-runtime-plan.md](14-colab-glm53-runtime-plan.md) — Colab A100で使う4変種の配布・容量予算・コンテキスト長の実行計画と実測項目
+
 ## 今後の拡張候補
 
 - ローカル文書 RAG (埋め込みモデル Qwen3-Embedding-0.6B を CPU で動かし sqlite-vec/LanceDB に格納、`search_docs` ツールとして追加)
