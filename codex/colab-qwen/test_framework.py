@@ -127,7 +127,7 @@ class LifecycleTests(unittest.TestCase):
     def test_start_tunnel_and_remote_config_use_dedicated_port(self):
         manifest = json.loads((session.HERE / 'manifest.json').read_text())
         args = SimpleNamespace(port=8085, context=131072, data_dir='/content/drive/MyDrive/Strata-data',
-                               reverify=False, startup_minutes=1)
+                               reverify=False, startup_minutes=1, variant='uncensored')
         instance = session.Session(args)
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / 'id_ed25519').touch()
@@ -137,16 +137,22 @@ class LifecycleTests(unittest.TestCase):
                  patch.object(session, 'catalog'), patch.object(session, 'available_port'), \
                  patch.object(session.shutil, 'which', return_value='/bin/tool'), \
                  patch.object(instance, 'allocate'), patch.object(instance, 'mount_drive'), \
-                 patch.object(instance, 'code'), patch.object(instance, 'colab'), \
+                 patch.object(instance, 'code') as code, patch.object(instance, 'colab'), \
                  patch.object(session.subprocess, 'Popen', return_value=child) as popen, \
                  patch.object(session, 'health', return_value={'loaded': True}), \
                  contextlib.redirect_stdout(io.StringIO()):
                 instance.start()
-            config = remote.engine_config(Path('/source'), Path('/engine'), Path('/data'), manifest, 131072, 8)
+            profile = manifest['variants']['uncensored']
+            config = remote.engine_config(Path('/source'), Path('/engine'), Path('/data'), profile, 131072, 8,
+                                          manifest['server_port'])
             command = popen.call_args.args[0]
             self.assertEqual(command[command.index('-L') + 1], f'127.0.0.1:8085:127.0.0.1:{config["port"]}')
             self.assertEqual(config['host'], '127.0.0.1')
             self.assertNotEqual(config['port'], 8080)
+            launched = [call.args[0] for call in code.call_args_list]
+            bootstrap = next(text for text in launched if 'bootstrap.pid' in text)
+            self.assertIn("'--variant', 'uncensored'", bootstrap)
+            self.assertEqual(config['model_name'], profile['model'])
 
     def test_close_flushes_before_stopping_owned_runtime(self):
         instance = session.Session(None)
@@ -448,10 +454,11 @@ class LifecycleTests(unittest.TestCase):
                 session.stop_runtime()
 
     def test_codex_settings_are_valid_toml(self):
-        command = session.codex_command(8085, 131072, ['exec', 'test'])
+        profile = session.manifest()['variants']['standard']
+        command = session.codex_command(8085, 131072, ['exec', 'test'], profile)
         values = [command[i + 1] for i, value in enumerate(command) if value == '-c']
         settings = tomllib.loads('\n'.join(values))
-        self.assertEqual(settings['model'], session.MODEL)
+        self.assertEqual(settings['model'], profile['model'])
         provider = settings['model_providers']['strata_colab']
         self.assertEqual(provider['wire_api'], 'responses')
         self.assertEqual(provider['base_url'], 'http://127.0.0.1:8085/v1')
@@ -473,7 +480,8 @@ class PreflightTests(unittest.TestCase):
     def test_busy_port_refused_before_build_and_download(self):
         with tempfile.TemporaryDirectory() as directory, socket.socket() as busy:
             busy.bind(('127.0.0.1', 0))
-            manifest = {'server_port': busy.getsockname()[1], 'files': []}
+            manifest = {'server_port': busy.getsockname()[1], 'default_variant': 'standard',
+                        'variants': {'standard': {'files': [], 'pack': 'packs/iq3_s'}}}
             (Path(directory) / 'manifest.json').write_text(json.dumps(manifest))
             with patch.object(remote, 'WORK', Path(directory)), \
                  patch.object(remote, 'ensure_drive', return_value=Path(directory)), \
@@ -490,7 +498,7 @@ class PreflightTests(unittest.TestCase):
             remote.check_server_port(8080)
 
     def test_insufficient_drive_space_rejected(self):
-        manifest = {'files': [{'destination': 'models/model.gguf', 'size': 10_000_000_000}]}
+        manifest = {'pack': 'packs/iq3_s', 'files': [{'destination': 'models/model.gguf', 'size': 10_000_000_000}]}
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=1000)), \
              contextlib.redirect_stdout(io.StringIO()):
@@ -498,12 +506,89 @@ class PreflightTests(unittest.TestCase):
                 remote.check_drive_space(Path(directory), manifest)
 
     def test_drive_space_counts_existing_partial(self):
-        manifest = {'files': [{'destination': 'model.gguf', 'size': 100}]}
+        manifest = {'pack': 'packs/iq3_s', 'files': [{'destination': 'model.gguf', 'size': 100}]}
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / 'model.gguf.part').write_bytes(b'x' * 90)
             with patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=5_000_000_010)), \
                  contextlib.redirect_stdout(io.StringIO()):
                 remote.check_drive_space(Path(directory), manifest)
+
+    def test_unknown_variant_refused_before_download(self):
+        options = {'standard': {'files': []}, 'uncensored': {'files': []}}
+        self.assertEqual(remote.select_variant({'default_variant': 'standard', 'variants': options}, None)[0],
+                         'standard')
+        self.assertEqual(remote.select_variant({'default_variant': 'standard', 'variants': options},
+                                               'uncensored')[0], 'uncensored')
+        for requested in ('jailbroken', None):  # No usable default when the manifest omits one.
+            with self.assertRaisesRegex(RuntimeError, 'choose from'):
+                remote.select_variant({'variants': options}, requested)
+
+    def test_uncensored_variant_keeps_its_own_shards_and_pack(self):
+        manifest = session.manifest()
+        standard, uncensored = manifest['variants']['standard'], manifest['variants']['uncensored']
+        self.assertEqual(manifest['default_variant'], 'standard')
+        self.assertNotEqual(standard['model'], uncensored['model'])
+        self.assertNotEqual(standard['pack'], uncensored['pack'])
+        # iq_pack.py finds -0000N-of-0000M siblings beside --gguf, so shards of two
+        # models must never share a directory even when one shard is byte-identical.
+        for profile in (standard, uncensored):
+            shards = profile['files'][:2]
+            self.assertEqual(len({item['destination'].rsplit('/', 1)[0] for item in shards}), 1)
+        standard_dir = standard['files'][0]['destination'].rsplit('/', 1)[0]
+        uncensored_dir = uncensored['files'][0]['destination'].rsplit('/', 1)[0]
+        self.assertNotEqual(standard_dir, uncensored_dir)
+        self.assertEqual(uncensored['files'][0]['repo'], 'SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF')
+        self.assertNotEqual(standard['files'][0]['sha256'], uncensored['files'][0]['sha256'])
+        # Both variants run the largest tier Strata supports, and share the MTP runtime files.
+        self.assertEqual([item['destination'] for item in standard['files'][2:]],
+                         [item['destination'] for item in uncensored['files'][2:]])
+        self.assertTrue(standard['files'][0]['source'].startswith('IQ3_S/'))
+        self.assertTrue(uncensored['files'][0]['source'].startswith('IQ3_S/'))
+
+    def test_engine_config_selects_variant_paths_and_model(self):
+        manifest = session.manifest()
+        for name in ('standard', 'uncensored'):
+            profile = manifest['variants'][name]
+            config = remote.engine_config(Path('/source'), Path('/engine'), Path('/data'), profile, 65536, 4, 18080)
+            self.assertEqual(config['model_name'], profile['model'])
+            self.assertIn(str(Path('/data') / profile['pack']), config['args'])
+            self.assertEqual(config['args'][config['args'].index('--native') + 1],
+                             str(Path('/data') / profile['files'][0]['destination']))
+            self.assertEqual(config['args'][config['args'].index('--ple-gguf') + 1],
+                             str(Path('/data') / profile['files'][1]['destination']))
+
+    def test_health_accepts_either_variant_model(self):
+        models = [profile['model'] for profile in session.manifest()['variants'].values()]
+        for served in models + ['some-other-model', None]:
+            body = json.dumps({'model': served, 'loaded': True, 'max_context': 131072}).encode()
+            for expected in [None] + models:
+                with patch.object(session.OPENER, 'open', return_value=io.BytesIO(body)):
+                    info = session.health(8085, expected)
+                accepted = served == expected if expected else served in models
+                if accepted:
+                    self.assertEqual(info['model'], served)
+                else:
+                    self.assertIsNone(info)
+
+    def test_variant_selection_and_model_lookup(self):
+        default, standard = session.select_variant(None)
+        self.assertEqual(default, session.manifest()['default_variant'])
+        name, uncensored = session.select_variant('uncensored')
+        self.assertEqual(name, 'uncensored')
+        self.assertNotEqual(standard['model'], uncensored['model'])
+        self.assertEqual(session.profile_for_model(uncensored['model'])[0], 'uncensored')
+        self.assertEqual(session.profile_for_model(standard['model'])[0], 'standard')
+        self.assertEqual(session.profile_for_model('unknown'), (None, None))
+        with self.assertRaisesRegex(RuntimeError, 'variant'):
+            session.select_variant('nope')
+
+    def test_uncensored_codex_settings_are_valid_toml(self):
+        profile = session.manifest()['variants']['uncensored']
+        command = session.codex_command(8085, 131072, ['exec', 'test'], profile)
+        values = [command[i + 1] for i, value in enumerate(command) if value == '-c']
+        settings = tomllib.loads('\n'.join(values))
+        self.assertEqual(settings['model'], profile['model'])
+        self.assertEqual(settings['model_providers']['strata_colab']['name'], profile['provider_name'])
 
     def test_remote_shutdown_stops_model_before_drive_flush(self):
         import types

@@ -63,9 +63,18 @@ def check_server_port(port):
         raise RuntimeError(f'Strata port {port} is unavailable; refusing to build/download first.') from exc
 
 
-def check_drive_space(data, manifest):
+def select_variant(manifest, requested):
+    """Resolve the startup model variant; every download and pack path comes from it."""
+    options = manifest['variants']
+    name = requested or manifest.get('default_variant')
+    if name not in options:
+        raise RuntimeError(f'Unknown model variant {name!r}; choose from: ' + ', '.join(sorted(options)))
+    return name, options[name]
+
+
+def check_drive_space(data, profile):
     missing = 0
-    for item in manifest['files']:
+    for item in profile['files']:
         path = data / item['destination']
         partial = path.with_name(path.name + '.part')
         present = path.stat().st_size if path.is_file() else partial.stat().st_size if partial.is_file() else 0
@@ -73,7 +82,7 @@ def check_drive_space(data, manifest):
         if item['destination'].endswith('.gguf'):
             print(f'GGUF cache: {path.name}: {present / 1e9:.2f}/{item["size"] / 1e9:.2f} GB', flush=True)
     # Leave space for the dense pack, tokenizer and small engine artifacts.
-    reserve = 128 * 1024 * 1024 if (data / 'packs/iq3_s/.complete.json').is_file() else 5_000_000_000
+    reserve = 128 * 1024 * 1024 if (data / profile['pack'] / '.complete.json').is_file() else 5_000_000_000
     free = shutil.disk_usage(data).free
     print(f'Drive reported free space: {free / 1e9:.2f} GB; need about {(missing + reserve) / 1e9:.2f} GB', flush=True)
     if free < missing + reserve:
@@ -162,9 +171,11 @@ def source_tree(repo, commit, destination):
     archive.unlink()
 
 
-def engine_config(source, engine, data, manifest, context, workers):
-    shards = [data / item['destination'] for item in manifest['files'][:2]]
-    pack = data / 'packs/iq3_s'
+def engine_config(source, engine, data, profile, context, workers, port):
+    # iq_pack.py and the engine resolve sibling shards by name inside the shard's own
+    # directory, so each variant keeps its own models/ and packs/ subtree.
+    shards = [data / item['destination'] for item in profile['files'][:2]]
+    pack = data / profile['pack']
     return {
         'exe': str(engine), 'cwd': str(source),
         'args': ['--pack', str(pack), '--native', str(shards[0]),
@@ -174,8 +185,8 @@ def engine_config(source, engine, data, manifest, context, workers):
                  '--resident-experts', '--max-context', str(context), '--kv', 'int8',
                  '--spec', '4', '--spec-min-p', '0.5', '--mtp', str(data / 'mtp/rt'),
                  '--pool-workers', str(workers)],
-        'tokenizer': str(pack / 'tokenizer'), 'model_name': manifest['model'],
-        'log': str(data / 'logs/engine.log'), 'host': '127.0.0.1', 'port': manifest['server_port'],
+        'tokenizer': str(pack / 'tokenizer'), 'model_name': profile['model'],
+        'log': str(data / 'logs/engine.log'), 'host': '127.0.0.1', 'port': port,
         'gpu': 0, 'gpus_asked': True, 'open_browser': False, 'draft_vocab': 'cjk',
         'api_monitor': True, 'env': {'STRATA_RESIDENT_HEADROOM_GIB': '8'},
         'lib_dirs': ['/usr/local/cuda/lib64'],
@@ -186,13 +197,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-dir', default='/content/drive/MyDrive/Strata-data')
     parser.add_argument('--context', type=int, default=131072)
+    parser.add_argument('--variant')
     parser.add_argument('--reverify', action='store_true')
     args = parser.parse_args()
     data = ensure_drive(Path(args.data_dir))  # Must precede every weight/cache download.
     WORK.mkdir(exist_ok=True)
     manifest = json.loads((WORK / 'manifest.json').read_text())
+    variant, profile = select_variant(manifest, args.variant)
     check_server_port(manifest['server_port'])  # Fail before building or downloading.
-    check_drive_space(data, manifest)
+    check_drive_space(data, profile)
+    print('Model variant:', variant, flush=True)
     gpu = subprocess.check_output(['nvidia-smi', '--query-gpu=name,memory.total,compute_cap', '--format=csv,noheader'], text=True)
     print('GPU:', gpu.strip(), flush=True)
     if 'A100' not in gpu or '8.0' not in gpu:
@@ -241,24 +255,24 @@ def main():
             shutil.copy2(built, engine)
         cached.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(engine, cached)
-    for item in manifest['files']:
+    for item in profile['files']:
         url = f'https://huggingface.co/{item["repo"]}/resolve/{item["revision"]}/{item["source"]}'
         fetch_verified(url, data / item['destination'], item['size'], item['sha256'], reverify=args.reverify)
-    pack = data / 'packs/iq3_s'
+    pack = data / profile['pack']
     pack_marker = pack / '.complete.json'
-    pack_identity = {'strata': manifest['strata_commit'], 'gguf': manifest['files'][0]['sha256']}
+    pack_identity = {'strata': manifest['strata_commit'], 'gguf': profile['files'][0]['sha256']}
     complete = pack_marker.is_file() and json.loads(pack_marker.read_text()) == pack_identity
     complete = complete and all((pack / name).is_file() for name in ['dense.bin', 'dense.txt', 'native_experts.txt', 'tokenizer/vocab.json'])
     if not complete:
-        run(python, source / 'tools/iq_pack.py', '--gguf', data / manifest['files'][0]['destination'], '--out', pack)
+        run(python, source / 'tools/iq_pack.py', '--gguf', data / profile['files'][0]['destination'], '--out', pack)
         atomic_json(pack_marker, pack_identity)
     (data / 'logs').mkdir(exist_ok=True)
     workers = max(1, (os.cpu_count() or 2) - 1)
-    config = engine_config(source, engine, data, manifest, args.context, workers)
+    config = engine_config(source, engine, data, profile, args.context, workers, manifest['server_port'])
     config_path = WORK / 'strata.json'
     atomic_json(config_path, config)
     port = manifest['server_port']
-    print(f'Starting Strata IQ3_S, localhost:{port}, context', args.context, flush=True)
+    print(f'Starting Strata IQ3_S {variant}, localhost:{port}, context', args.context, flush=True)
     os.chdir(source)
     os.execv(str(python), [str(python), '-m', 'serve.server', '--engine', 'strata', '--config', str(config_path), '--port', str(port)])
 

@@ -23,12 +23,32 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 STATE = HERE / '.runtime'
 SESSION = 'strata-qwen'
-MODEL = 'qwen3.8-flash-next-iq3_s'
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def say(message):
     print('[strata-qwen]', message, flush=True)
+
+
+def manifest():
+    return json.loads((HERE / 'manifest.json').read_text())
+
+
+def select_variant(name):
+    """Pick the startup variant; the default comes from manifest.json."""
+    data = manifest()
+    options = data['variants']
+    chosen = name or data.get('default_variant')
+    if chosen not in options:
+        raise RuntimeError('--variant は ' + ' / '.join(sorted(options)) + ' のどれかにしてください。')
+    return chosen, options[chosen]
+
+
+def profile_for_model(model):
+    for name, profile in manifest()['variants'].items():
+        if profile['model'] == model:
+            return name, profile
+    return None, None
 
 
 def proc_identity(pid):
@@ -39,11 +59,14 @@ def proc_identity(pid):
         return None
 
 
-def health(port):
+def health(port, model=None):
     try:
         with OPENER.open(f'http://127.0.0.1:{port}/health', timeout=3) as response:
             info = json.load(response)
-        return info if info.get('model') == MODEL and info.get('loaded') is True else None
+        if info.get('loaded') is not True:
+            return None
+        served = {profile['model'] for profile in manifest()['variants'].values()}
+        return info if info.get('model') in (served if model is None else {model}) else None
     except (OSError, ValueError, urllib.error.URLError):
         return None
 
@@ -62,7 +85,7 @@ def colab_interpreter():
     return interpreter
 
 
-def catalog(context):
+def catalog(context, profile):
     result = json.loads((ROOT / 'codex/models.json').read_text())
     model = result['models'][0]
     bundled = subprocess.run(['codex', 'debug', 'models', '--bundled'], capture_output=True, text=True, check=True)
@@ -71,7 +94,7 @@ def catalog(context):
     if standard is None:
         standard = next(entry for entry in models if entry.get('base_instructions'))
     model.update({key: standard[key] for key in ('base_instructions', 'model_messages')})
-    model.update(slug=MODEL, display_name='Qwen3.8 Flash Next IQ3_S (Colab A100)',
+    model.update(slug=profile['model'], display_name=profile['display_name'],
                  description='Strata on Colab A100, Google Drive weights.',
                  context_window=context, max_context_window=context, input_modalities=['text'],
                  supports_image_detail_original=False)
@@ -80,13 +103,13 @@ def catalog(context):
     return path
 
 
-def codex_command(port, context, arguments):
+def codex_command(port, context, arguments, profile):
     settings = {
-        'model': MODEL, 'model_provider': 'strata_colab',
+        'model': profile['model'], 'model_provider': 'strata_colab',
         'model_catalog_json': str(STATE / 'models.json'),
         'model_context_window': context, 'model_auto_compact_token_limit': context * 3 // 4,
         'model_reasoning_effort': 'high', 'show_raw_agent_reasoning': True,
-        'model_providers.strata_colab.name': 'Strata Colab A100 IQ3_S',
+        'model_providers.strata_colab.name': profile['provider_name'],
         'model_providers.strata_colab.base_url': f'http://127.0.0.1:{port}/v1',
         'model_providers.strata_colab.wire_api': 'responses',
         'model_providers.strata_colab.requires_openai_auth': False,
@@ -113,6 +136,7 @@ def codex_command(port, context, arguments):
 class Session:
     def __init__(self, args):
         self.args = args
+        self.variant, self.profile = select_variant(getattr(args, 'variant', None))
         self.children = []
         self.owned = False
         self.drive_mounted = False
@@ -309,7 +333,7 @@ class Session:
             if not shutil.which(tool):
                 raise RuntimeError(f'{tool} is required.')
         available_port(self.args.port)
-        catalog(self.args.context)  # Verify Codex integration before renting a GPU.
+        catalog(self.args.context, self.profile)  # Verify Codex integration before renting a GPU.
         identity = STATE / 'id_ed25519'
         if not identity.is_file():
             self.run(['ssh-keygen', '-t', 'ed25519', '-N', '', '-f', str(identity), '-q'])
@@ -319,7 +343,7 @@ class Session:
         for name in ('remote.py', 'manifest.json'):
             self.colab('upload', '-s', SESSION, str(HERE / name), 'content/strata-qwen/' + name, timeout=45)
         remote_args = ['python3', '-u', '/content/strata-qwen/remote.py', '--data-dir', self.args.data_dir,
-                       '--context', str(self.args.context)]
+                       '--context', str(self.args.context), '--variant', self.variant]
         if self.args.reverify:
             remote_args.append('--reverify')
         self.code('import subprocess\nfrom pathlib import Path\n'
@@ -344,8 +368,8 @@ class Session:
         while time.monotonic() < deadline:
             if self.master.poll() is not None:
                 raise RuntimeError(f'SSH tunnel failed. See {STATE / "ssh.log"}')
-            if health(self.args.port):
-                say(f'準備完了: http://127.0.0.1:{self.args.port}/v1 (IQ3_S)')
+            if health(self.args.port, self.profile['model']):
+                say(f'準備完了: http://127.0.0.1:{self.args.port}/v1 ({self.variant})')
                 return
             if Path(self.socket).exists():
                 tail = self.ssh("tail -n 4 /content/strata-qwen/bootstrap.log; "
@@ -452,6 +476,7 @@ def main():
     parser.add_argument('--port', type=int, default=8085)
     parser.add_argument('--context', type=int, choices=[32768, 65536, 131072], default=131072)
     parser.add_argument('--data-dir', default='/content/drive/MyDrive/Strata-data')
+    parser.add_argument('--variant', help='Model variant: standard or uncensored (default from manifest.json)')
     parser.add_argument('--max-hours', type=float, default=4.0, help='Hard runtime lifetime, including setup (default 4 hours)')
     parser.add_argument('--startup-minutes', type=float, default=180.0)
     parser.add_argument('--flush-minutes', type=float, default=10.0,
@@ -474,8 +499,11 @@ def main():
     if args.command == 'doctor':
         say('Required tools: ' + ', '.join(f'{name}={shutil.which(name) or "MISSING"}' for name in ('colab', 'ssh', 'ssh-keygen', 'codex')))
         say('Drive destination: ' + args.data_dir)
-        say('GGUF bytes: ' + str(sum(x['size'] for x in json.loads((HERE / 'manifest.json').read_text())['files'][:2])))
-        catalog(args.context)
+        variant, profile = select_variant(args.variant)
+        say('Model variants: ' + ', '.join(sorted(manifest()['variants'])))
+        say(f'Selected variant: {variant} ({profile["model"]})')
+        say('GGUF bytes: ' + str(sum(x['size'] for x in profile['files'][:2])))
+        catalog(args.context, profile)
         say('Codex model catalog generated; no runtime allocated.')
         return 0
     if args.command == 'stop':
@@ -489,9 +517,13 @@ def main():
         info = health(args.port)
         if not info:
             raise RuntimeError('Start ./colab-qwen start in another terminal first.')
+        running, profile = profile_for_model(info['model'])
+        if args.variant and args.variant != running:
+            raise RuntimeError(f'稼働中の変種は {running} です。{args.variant} を使うには先に stop して起動し直す。')
         context = info['max_context']
-        catalog(context)
-        return subprocess.call(codex_command(args.port, context, extra))
+        catalog(context, profile)
+        say('接続先の変種: ' + running)
+        return subprocess.call(codex_command(args.port, context, extra, profile))
     lock = (STATE / 'session.lock').open('a+')
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -499,9 +531,10 @@ def main():
         lock.close()
         raise RuntimeError('Supervisor already running. Use client or stop.') from None
     state_path = STATE / 'session.json'
-    state_path.write_text(json.dumps({'pid': os.getpid(), 'identity': proc_identity(os.getpid()),
-                                     'port': args.port, 'flush_minutes': args.flush_minutes}))
     session = Session(args)
+    state_path.write_text(json.dumps({'pid': os.getpid(), 'identity': proc_identity(os.getpid()),
+                                     'port': args.port, 'variant': session.variant,
+                                     'flush_minutes': args.flush_minutes}))
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGALRM):
         signal.signal(sig, interrupted)
     signal.alarm(max(1, int(args.max_hours * 3600)))
@@ -513,11 +546,12 @@ def main():
         session.start()
         child = None
         if args.command == 'codex':
-            child = subprocess.Popen(codex_command(args.port, args.context, extra))
+            child = subprocess.Popen(codex_command(args.port, args.context, extra, session.profile))
             session.children.append(child)
         else:
             say('このターミナルは起動したまま使います。Ctrl+C または別ターミナルの ./colab-qwen stop で終了。')
             say('Codex: ./colab-qwen client -- [Codex arguments]')
+            say(f'起動した変種: {session.variant} ({session.profile["model"]})')
         while True:
             if session.master.poll() is not None:
                 raise RuntimeError('SSH tunnel closed; stopping runtime.')
