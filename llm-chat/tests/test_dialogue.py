@@ -160,6 +160,8 @@ class DialogueAPITest(unittest.IsolatedAsyncioTestCase):
                 )
                 self.upload_ids[identifier] = index
                 return httpx.Response(201, json={"id": identifier})
+            if path == "/local/voices/lookup":
+                return httpx.Response(404)
             if path.endswith("/prepare"):
                 if engine == "qwen":
                     index = next(
@@ -173,7 +175,10 @@ class DialogueAPITest(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("二人目のカット前の全文".encode(), request.content)
                     options = {"prompt_id": signatures[index]}
                 else:
-                    index = self.upload_ids[path.split("/")[-2]]
+                    identifier = path.split("/")[-2]
+                    if identifier not in self.upload_ids:
+                        return httpx.Response(404)
+                    index = self.upload_ids[identifier]
                     options = {"ref_latents": [f"/cache/{signatures[index]}.pt"]}
                 self.prepared.append(index)
                 return httpx.Response(200, json=options)

@@ -80,6 +80,31 @@ class ReferenceTest(unittest.TestCase):
         records = torch.load(path, weights_only=True)
         self.assertEqual(len(records), 1)
 
+    def test_lookup_survives_restart_without_decoding_or_loading_model(self):
+        data = wav(np.zeros(8000, dtype=np.float32))
+        prepared = self.prepare(data, "  参照の文章  ")
+        req = service.ReferenceLookup(
+            reference_sha256=hashlib.sha256(data).hexdigest(),
+            transcript="参照の文章",
+        )
+        self.load.reset_mock()
+        with patch.object(service.sf, "read", side_effect=AssertionError("decoded again")):
+            self.assertEqual(service.lookup(req), {"prompt_id": prepared["prompt_id"]})
+        self.load.assert_not_called()
+        # A transcript or model revision change must not return an old prompt.
+        with self.assertRaises(HTTPException) as raised:
+            service.lookup(req.model_copy(update={"transcript": "別の文章"}))
+        self.assertEqual(raised.exception.status_code, 404)
+        with patch.dict(service.MANIFEST["models"]["base"], revision="changed"):
+            with self.assertRaises(HTTPException) as raised:
+                service.lookup(req)
+            self.assertEqual(raised.exception.status_code, 404)
+        path = service.ROOT / "voices" / ".prompts" / f'{prepared["prompt_id"]}.pt'
+        path.unlink()
+        with self.assertRaises(HTTPException) as raised:
+            service.lookup(req)
+        self.assertEqual(raised.exception.status_code, 404)
+
     def test_source_over_old_size_limit_is_cropped_before_model_and_downmixed(self):
         data = wav(np.full((121 * 48000, 2), 0.25, dtype=np.float32), 48000, "FLOAT")
         self.assertGreater(len(data), 32 * 1024 * 1024)

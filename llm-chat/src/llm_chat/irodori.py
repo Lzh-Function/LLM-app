@@ -120,25 +120,24 @@ class IrodoriClient:
                 async with self.http() as client:
                     latents = []
                     wavs = []
-                    for index in range(len(item["references"])):
-                        data = await asyncio.to_thread(
-                            library.audio_path(identifier, index).read_bytes
-                        )
-                        voice_id = f"{identifier}_{index}"
-                        upload = await client.post(
-                            f"{self.url}/v1/audio/voices",
-                            data={"voice_id": voice_id},
-                            files={"file": (f"{voice_id}.wav", data, "audio/wav")},
-                        )
-                        if upload.status_code == 409:
-                            upload = await client.put(
-                                f"{self.url}/v1/audio/voices/{voice_id}",
+                    for index, reference in enumerate(item["references"]):
+                        voice_id = f"sha256_{reference['sha256']}"
+                        endpoint = f"{self.url}/local/voices/{voice_id}/prepare"
+                        # Persistent content IDs survive product copies and client restarts.
+                        prepared = await client.post(endpoint)
+                        if prepared.status_code == 404:
+                            data = await asyncio.to_thread(
+                                library.audio_path(identifier, index).read_bytes
+                            )
+                            upload = await client.post(
+                                f"{self.url}/v1/audio/voices",
+                                data={"voice_id": voice_id},
                                 files={"file": (f"{voice_id}.wav", data, "audio/wav")},
                             )
-                        upload.raise_for_status()
-                        prepared = await client.post(
-                            f"{self.url}/local/voices/{voice_id}/prepare"
-                        )
+                            # An existing content-addressed WAV must never be overwritten.
+                            if upload.status_code != 409:
+                                upload.raise_for_status()
+                            prepared = await client.post(endpoint)
                         if prepared.status_code == 404:
                             # Unextended official servers still work with waveform references.
                             metadata = await client.get(f"{self.url}/v1/audio/voices")

@@ -88,22 +88,30 @@ class QwenClient(IrodoriClient):
             item = item if item is not None else library.get(identifier)
             transcript = item["provenance"].get(
                 "reference_text", item["provenance"].get("text", "")
-            )
+            ).strip()
             signature = hashlib.sha256(
                 (item["references"][0]["sha256"] + transcript).encode()
             ).hexdigest()
             if signature in self._references:
                 return self._references[signature]
             try:
-                data = await asyncio.to_thread(
-                    library.audio_path(identifier, 0).read_bytes
-                )
                 async with self.http() as client:
                     response = await client.post(
-                        f"{self.url}/local/voices/prepare",
-                        data={"transcript": transcript},
-                        files={"file": ("reference.wav", data, "audio/wav")},
+                        f"{self.url}/local/voices/lookup",
+                        json={
+                            "reference_sha256": item["references"][0]["sha256"],
+                            "transcript": transcript,
+                        },
                     )
+                    if response.status_code == 404:
+                        data = await asyncio.to_thread(
+                            library.audio_path(identifier, 0).read_bytes
+                        )
+                        response = await client.post(
+                            f"{self.url}/local/voices/prepare",
+                            data={"transcript": transcript},
+                            files={"file": ("reference.wav", data, "audio/wav")},
+                        )
                     response.raise_for_status()
                     prepared = response.json()
                 options = {"prompt_id": prepared["prompt_id"]}

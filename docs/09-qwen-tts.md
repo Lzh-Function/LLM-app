@@ -54,6 +54,7 @@ FlashAttentionは導入せず、PyTorch SDPAを明示している。この環境
 [Baseの公式モデルカード](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)に沿って、正確な参照文章があれば音声コード・文章・話者埋め込みを使うICL方式でクローンする。
 生成した参照は読み上げ文章を自動保存する。取り込むWAVは「読み上げ内容」を入力でき、作品の詳細設定でも参照文章を上書きできる。
 作品での上書きは作品内に保存し、共有ライブラリへ反映しない。
+公式SDKの`create_voice_clone_prompt`で準備したプロンプトを`voices/.prompts/`へ永続保存し、`voice_clone_prompt`として再利用する。`POST /local/voices/lookup`は音声SHA256と参照文章からプロンプトIDを検索する。モデル条件も検索キーに含め、アプリ再起動後も同じ条件なら参照WAVの再転送・デコードを省く。文章・モデルが変わった場合やキャッシュ削除後は改めて準備する。旧プロンプトは初回の準備API呼び出しで検索用の索引を追加し、再計算せず利用する。
 
 参照文章がなければ`x_vector_only_mode=True`で話者埋め込みのみを使う。条件の`metrics.clone_mode`に`icl`または`speaker_embedding_only`を記録する。
 Qwenでは先頭の参照WAV一つを使う。Irodori用の補助参照を追加していてもQwenは結合しない。

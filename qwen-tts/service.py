@@ -107,6 +107,34 @@ def runtime(req: RuntimeRequest):
         return health()
 
 
+class ReferenceLookup(BaseModel):
+    reference_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    transcript: str = Field(default="", max_length=6000)
+
+
+def prompt_index(reference_sha256: str, transcript: str) -> Path:
+    identity = json.dumps(
+        [reference_sha256, transcript.strip(), MANIFEST["models"]["base"]],
+        sort_keys=True,
+    )
+    key = hashlib.sha256(identity.encode()).hexdigest()
+    return ROOT / "voices" / ".prompts" / ".index" / f"{key}.json"
+
+
+@app.post("/local/voices/lookup")
+def lookup(req: ReferenceLookup):
+    # Locate a persistent prompt without uploading or decoding the same WAV again.
+    with LOCK:
+        index = prompt_index(req.reference_sha256, req.transcript)
+        if index.is_file():
+            identifier = json.loads(index.read_text())["prompt_id"]
+            if re.fullmatch(r"[a-f0-9]{64}", identifier) and (
+                ROOT / "voices" / ".prompts" / f"{identifier}.pt"
+            ).is_file():
+                return {"prompt_id": identifier}
+    raise HTTPException(404, "Reference prompt is not cached")
+
+
 @app.post("/local/voices/prepare")
 def prepare(
     file: Annotated[UploadFile, File()],
@@ -158,6 +186,13 @@ def prepare(
             temp = path.with_suffix(".pending")
             torch.save(records, temp)
             temp.replace(path)
+        if not trimmed:
+            # Keep existing prompt IDs and caches compatible with earlier versions.
+            index = prompt_index(hashlib.sha256(data).hexdigest(), transcript)
+            index.parent.mkdir(parents=True, exist_ok=True)
+            pending = index.with_suffix(".pending")
+            pending.write_text(json.dumps({"prompt_id": signature}) + "\n")
+            pending.replace(index)
     return {
         "prompt_id": signature,
         "clone_mode": "icl" if transcript else "speaker_embedding_only",

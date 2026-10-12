@@ -149,6 +149,8 @@ class IrodoriAPITest(unittest.IsolatedAsyncioTestCase):
             if path.startswith("/v1/audio/voices/") and request.method == "PUT":
                 return httpx.Response(200, json={"id": path.split("/")[-1]})
             if path.endswith("/prepare"):
+                if path.split("/")[-2] not in self.uploads:
+                    return httpx.Response(404)
                 self.prepared += 1
                 return httpx.Response(
                     200, json={"ref_latents": [f"/server/{path.split('/')[-2]}.pt"]}
@@ -245,13 +247,18 @@ class IrodoriAPITest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("style_id", speech[-1])
 
-    async def test_prepare_reuploads_on_restart_and_uses_put_for_existing_file(self):
+    async def test_prepare_reuses_persistent_content_id_after_restart_and_copy(self):
         item = self.library.create(wav(), name="声", kind="voice", provenance={})
-        await self.runtime.irodori.prepare(self.library, item["id"])
+        first = await self.runtime.irodori.prepare(self.library, item["id"])
         self.runtime.irodori.clear()
-        await self.runtime.irodori.prepare(self.library, item["id"])
+        copied = self.library.create(wav(), name="複製", kind="voice", provenance={})
+        second = await self.runtime.irodori.prepare(self.library, copied["id"])
+        self.assertEqual(first, second)
         self.assertEqual(self.prepared, 2)
-        self.assertTrue(any(r.method == "PUT" for r in self.requests))
+        uploads = [r for r in self.requests if r.method == "POST" and r.url.path == "/v1/audio/voices"]
+        self.assertEqual(len(uploads), 1)
+        self.assertEqual(list(self.uploads), [f"sha256_{item['references'][0]['sha256']}"])
+        self.assertFalse(any(r.method == "PUT" for r in self.requests))
 
     async def test_off_cold_wrong_mode_invalid_preset_and_legacy_engine_are_rejected(
         self,
