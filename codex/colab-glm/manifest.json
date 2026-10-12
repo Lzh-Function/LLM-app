@@ -1,0 +1,148 @@
+{
+  "maya_commit": "eb9b7ec88d6f7802f15b218b551550f749c7a94a",
+  "maya_version": "1.1.1",
+  "llama_commit": "efe3626b119ff81033e309c3ba07a770bef2c546",
+  "maya_llama_commit": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
+  "server_port": 18081,
+  "default_variant": "flash",
+  "variants": {
+    "flash": {
+      "model": "glm-5.3-flash-maya-l",
+      "display_name": "GLM-5.3-Flash Maya-L IQ3_S (Colab A100)",
+      "provider_name": "Strata GLM Colab A100 Maya-L",
+      "engine": "maya",
+      "contexts": [32768, 65536, 131072],
+      "default_context": 131072,
+      "maya": {
+        "model": "Maya-L",
+        "draft": "mtp",
+        "no_vision": true,
+        "env": {
+          "STRATA_GLM_RAM_RESIDENT": "1",
+          "STRATA_GLM_KV_INT8": "1",
+          "STRATA_GLM_RAM_HEADROOM_GB": "16"
+        }
+      },
+      "files": [
+        {
+          "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF",
+          "revision": "f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da",
+          "source": "Maya-L/GLM-5.3-Flash-Maya-L-IQ3_S-00001-of-00004.gguf",
+          "destination": "models/Maya-L/GLM-5.3-Flash-Maya-L-IQ3_S-00001-of-00004.gguf",
+          "size": 47718550176,
+          "sha256": "c41aeaf3a3e0022150b7c355e7f4df6c92ba68c4794e3e827e02e56b54886b9e"
+        },
+        {
+          "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF",
+          "revision": "f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da",
+          "source": "Maya-L/GLM-5.3-Flash-Maya-L-IQ3_S-00002-of-00004.gguf",
+          "destination": "models/Maya-L/GLM-5.3-Flash-Maya-L-IQ3_S-00002-of-00004.gguf",
+          "size": 47957222464,
+          "sha256": "351d59366afb7be7dfc3fb7af91281f7ccf00760b17dc45f82090325a7b34f64"
+        },
+        {
+          "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF",
+          "revision": "f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da",
+          "source": "Maya-L/GLM-5.3-Flash-Maya-L-IQ3_S-00003-of-00004.gguf",
+          "destination": "models/Maya-L/GLM-5.3-Flash-Maya-L-IQ3_S-00003-of-00004.gguf",
+          "size": 47305387552,
+          "sha256": "3685962fdfeaf130b74f98d3ce703ee33d818aa9991725932cb305b7c48db8af"
+        },
+        {
+          "repo": "peasantsmith/GLM-5.3-Flash-Maya-GGUF",
+          "revision": "f16ee4ba50d8fd2bb726ea1862ca6ca14ba188da",
+          "source": "Maya-L/GLM-5.3-Flash-Maya-L-IQ3_S-00004-of-00004.gguf",
+          "destination": "models/Maya-L/GLM-5.3-Flash-Maya-L-IQ3_S-00004-of-00004.gguf",
+          "size": 13338053216,
+          "sha256": "1af62cd72de6460c85369d988abbb790d6ec3a97507df51faf9bf32aa2b600d0"
+        }
+      ]
+    },
+    "flash-uncensored": {
+      "model": "glm-5.3-flash-uncensored-iq3_xxs",
+      "display_name": "GLM-5.3-Flash IQ3_XXS uncensored (Colab A100)",
+      "provider_name": "Strata GLM Colab A100 Flash uncensored",
+      "engine": "llama",
+      "contexts": [32768, 65536, 131072],
+      "default_context": 131072,
+      "llama": {
+        "first_shard": "models/bolding-iq3_xxs/GLM-5.3-Flash-Uncensored-IQ3_XXS-00001-of-00003.gguf",
+        "args": ["-ngl", "99", "-cmoe", "--moe-cache-mib", "32768", "-fa", "on", "-np", "1", "--jinja",
+                 "--temp", "0.7", "--min-p", "0.05"]
+      },
+      "files": [
+        {
+          "repo": "BoldingBuilds/orcarouter_GLM-5.3-Flash-Uncensored-GGUF",
+          "revision": "8a31ca66485373f9d5c002f5400b2aecaff84dfe",
+          "source": "IQ3_XXS/GLM-5.3-Flash-Uncensored-IQ3_XXS-00001-of-00003.gguf",
+          "destination": "models/bolding-iq3_xxs/GLM-5.3-Flash-Uncensored-IQ3_XXS-00001-of-00003.gguf",
+          "size": 45672911040,
+          "sha256": "3a6311476ad45ca3e26dab5146277fc94f79741e0d349d919bff5bd48eb0c932"
+        },
+        {
+          "repo": "BoldingBuilds/orcarouter_GLM-5.3-Flash-Uncensored-GGUF",
+          "revision": "8a31ca66485373f9d5c002f5400b2aecaff84dfe",
+          "source": "IQ3_XXS/GLM-5.3-Flash-Uncensored-IQ3_XXS-00002-of-00003.gguf",
+          "destination": "models/bolding-iq3_xxs/GLM-5.3-Flash-Uncensored-IQ3_XXS-00002-of-00003.gguf",
+          "size": 45407495392,
+          "sha256": "139f2ea5e2d1bb847cd21c5d5122e3a838fde7b5ae2895c6e2623ff318519a00"
+        },
+        {
+          "repo": "BoldingBuilds/orcarouter_GLM-5.3-Flash-Uncensored-GGUF",
+          "revision": "8a31ca66485373f9d5c002f5400b2aecaff84dfe",
+          "source": "IQ3_XXS/GLM-5.3-Flash-Uncensored-IQ3_XXS-00003-of-00003.gguf",
+          "destination": "models/bolding-iq3_xxs/GLM-5.3-Flash-Uncensored-IQ3_XXS-00003-of-00003.gguf",
+          "size": 43225116416,
+          "sha256": "b94bcd70929d7f4445d3acb6490a801511452214c8cf633fa2d912bef89f2188"
+        }
+      ]
+    },
+    "full": {
+      "model": "glm-5.3-slim-e192",
+      "display_name": "GLM-5.3 SLIM-E192 Q2 (Colab A100)",
+      "provider_name": "Strata GLM Colab A100 SLIM-E192",
+      "engine": "llama",
+      "contexts": [32768, 65536],
+      "default_context": 65536,
+      "llama": {
+        "first_shard": "models/slim-e192/GLM-5.3-Q2-DGX-Spark-00001-of-00004.gguf",
+        "args": ["-ngl", "99", "-cmoe", "--moe-cache-mib", "16384", "-fa", "on", "-np", "1", "--jinja",
+                 "--temp", "0.7", "--min-p", "0.05"]
+      },
+      "files": [
+        {
+          "repo": "autotrust/GLM-5.3-GGUF-DGX-Spark",
+          "revision": "dc02b40177c64563867260cd349b2fbffb38c102",
+          "source": "GLM-5.3-Q2-DGX-Spark-00001-of-00004.gguf",
+          "destination": "models/slim-e192/GLM-5.3-Q2-DGX-Spark-00001-of-00004.gguf",
+          "size": 44477268576,
+          "sha256": "f6645d466770fb50b3726822da54ac9596a761996081ee48275002325199c2be"
+        },
+        {
+          "repo": "autotrust/GLM-5.3-GGUF-DGX-Spark",
+          "revision": "dc02b40177c64563867260cd349b2fbffb38c102",
+          "source": "GLM-5.3-Q2-DGX-Spark-00002-of-00004.gguf",
+          "destination": "models/slim-e192/GLM-5.3-Q2-DGX-Spark-00002-of-00004.gguf",
+          "size": 44708574752,
+          "sha256": "310f86d8ab47f2a4ed8d893d53eb5a9ad7b27ab781ed5be32fbf16c288b34f53"
+        },
+        {
+          "repo": "autotrust/GLM-5.3-GGUF-DGX-Spark",
+          "revision": "dc02b40177c64563867260cd349b2fbffb38c102",
+          "source": "GLM-5.3-Q2-DGX-Spark-00003-of-00004.gguf",
+          "destination": "models/slim-e192/GLM-5.3-Q2-DGX-Spark-00003-of-00004.gguf",
+          "size": 44708574752,
+          "sha256": "cd42e5b7957231a8c840d7ead5ea95e458ce58d75a0fb80bf6b826e420b1547e"
+        },
+        {
+          "repo": "autotrust/GLM-5.3-GGUF-DGX-Spark",
+          "revision": "dc02b40177c64563867260cd349b2fbffb38c102",
+          "source": "GLM-5.3-Q2-DGX-Spark-00004-of-00004.gguf",
+          "destination": "models/slim-e192/GLM-5.3-Q2-DGX-Spark-00004-of-00004.gguf",
+          "size": 26865884128,
+          "sha256": "6078d6ae9cc34a1a5e8cedfaaf422821e2443f27cf4c493168533fe70b0aa5ca"
+        }
+      ]
+    }
+  }
+}
