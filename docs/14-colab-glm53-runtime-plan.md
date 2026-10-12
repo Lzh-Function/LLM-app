@@ -147,9 +147,9 @@ MyDrive/Strata-data/glm53/
 └── engines/                  ビルド済みエンジン（commit名でキャッシュ）
 ```
 
-Qwenのruntimeと同じく、保存先はDrive内のみ（SSDフォールバックなし）、空き容量検査は選択変種の未取得分だけを見る、ポート競合はビルド・ダウンロード前に失敗、失敗時はruntime stopまで行う、を維持する。エンジンがMayaとllama.cppで2系統になる分、`engines/` のキャッシュキーにエンジン名とcommitを入れる。
+Qwenのruntimeと同じく、保存先はDrive内のみ（SSDフォールバックなし）、ポート競合はビルド・ダウンロード前に失敗、失敗時はruntime stopまで行う、を維持する。エンジンがMayaとllama.cppで2系統になる分、`engines/` のキャッシュキーにエンジン名とcommitを入れる。
 
-**全変種をDriveに置くとGGUFだけで約420GiB**（145.58 + 125.08 + 149.72）。Driveの空きを先に確認する。Qwen両変種（約167GB）とGLM 3変種を同時に保持すると約600GB級になる。
+**全変種をDriveに置くとGGUFだけで約420GiB**（145.58 + 125.08 + 149.72）。Qwen両変種（約167GB）とGLM 3変種を置いても約600GB級で、Driveの空きはこのruntimeの制約にならない。
 
 ## 決まっていないこと
 
