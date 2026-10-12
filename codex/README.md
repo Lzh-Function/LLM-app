@@ -5,6 +5,10 @@ Colab A100 high-mem + GDriveのIQ3_Sは、`/workspace/LLM/colab-qwen codex`で�
 無検閲版のIQ3_Sは `colab-qwen codex --variant uncensored` で起動する（既定は通常版）。
 [Colab版の手順と確認状況](colab-qwen/README.md)を参照。
 
+GLM-5.3／Flashは `/workspace/LLM/colab-glm codex` で同じ手順で起動する。既定は `flash`（Project Maya）、無検閲Flashは `--variant flash-uncensored`、通常版GLM-5.3は `--variant full`。
+重みだけでなくビルド済みのA100エンジンもGDriveにキャッシュし、2回目以降は再ビルドしない。
+[Colab GLM版の手順と確認状況](colab-glm/README.md)を参照。
+
 ```bash
 cd /workspace/LLM
 uv run codex/setup.py
