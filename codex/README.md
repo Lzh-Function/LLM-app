@@ -2,6 +2,7 @@
 
 Colab A100 high-mem + GDriveのIQ3_Sは、`/workspace/LLM/colab-qwen codex`で起動から終了時のruntime停止まで行う。
 初回は自分のターミナルでGDriveのブラウザ認証を行う。個別の起動・停止は `colab-qwen start` / `colab-qwen stop`。
+無検閲版のIQ3_Sは `colab-qwen codex --variant uncensored` で起動する（既定は通常版）。
 [Colab版の手順と確認状況](colab-qwen/README.md)を参照。
 
 ```bash
