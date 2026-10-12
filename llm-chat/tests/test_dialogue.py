@@ -327,6 +327,10 @@ class DialogueAPITest(unittest.IsolatedAsyncioTestCase):
             [s["production_voice_id"] for s in first["speakers"]],
             [s["production_voice_id"] for s in second["speakers"]],
         )
+        for before, after in zip(first["speakers"], second["speakers"]):
+            first_path = self.root / "productions" / first["id"] / "voice" / before["production_voice_id"] / "reference.wav"
+            second_path = self.root / "productions" / second["id"] / "voice" / after["production_voice_id"] / "reference.wav"
+            self.assertTrue(first_path.samefile(second_path))
         await self.client.delete(endpoint)
         renamed = await self.client.patch(
             f"/api/synthesis/{second['id']}", json={"name": "対話作品の新しい名前"}
@@ -471,7 +475,9 @@ class DialogueAPITest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 503, response.text)
         self.assertEqual(len(self.spoken), 2)
         self.assertEqual((await self.client.get("/api/synthesis")).json()["items"], [])
-        self.assertFalse(list((self.root / "productions").glob("*")))
+        self.assertFalse(list((self.root / "productions").glob("*/metadata.json")))
+        self.assertFalse(list((self.root / "productions").glob(".pending-*")))
+        self.assertFalse(list((self.root / "productions" / ".references").glob("*.wav")))
 
     async def test_single_plural_file_needs_no_label_and_combined_upload_size_is_bounded(
         self,

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from .voice_library import IDENTIFIER, VoiceLibrary, serialized_mutation
+from .voice_library import IDENTIFIER, ReferenceCache, VoiceLibrary, serialized_mutation
 
 
 def write_json(path: Path, value: dict):
@@ -30,6 +30,10 @@ def write_archive(directory: Path, target: Path, replacements: dict | None = Non
 class ProductStore:
     def __init__(self, root: Path, legacy: Path | None = None):
         self.root, self.legacy = root, legacy
+        self.references = ReferenceCache(root / ".references")
+
+    def voice_library(self, directory: Path) -> VoiceLibrary:
+        return VoiceLibrary(directory / "voice", reference_cache=self.references)
 
     def directory(self, identifier: str) -> Path:
         if IDENTIFIER.fullmatch(identifier):
@@ -77,9 +81,27 @@ class ProductStore:
         (stage / "manuscript.txt").write_text(metadata["text"])
         write_json(stage / "settings.json", settings)
         write_json(stage / "metadata.json", metadata)
-        # Include private voice WAVs and their provenance in the portable package.
-        write_archive(stage, stage / "product.zip")
         stage.rename(self.root / metadata["id"])
+
+    @serialized_mutation
+    def archive(self, identifier: str) -> Path:
+        directory = self.directory(identifier)
+        has_settings = (directory / "settings.json").is_file()
+        existing = directory / "product.zip"
+        if not has_settings and not existing.is_file():
+            raise HTTPException(404, "旧形式の音声には作品ZIPがありません")
+        # ZIPs duplicate the WAVs; build only for a download and remove after serving.
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as stream:
+            target = Path(stream.name)
+        try:
+            if has_settings:
+                write_archive(directory, target)
+            else:
+                shutil.copyfile(existing, target)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        return target
 
     @serialized_mutation
     def rename(self, identifier: str, name: str) -> dict:
@@ -106,10 +128,11 @@ class ProductStore:
     @serialized_mutation
     def delete(self, identifier: str):
         shutil.rmtree(self.directory(identifier))
+        self.references.prune()
 
 
 def copy_voice(source: VoiceLibrary, item: dict, destination: VoiceLibrary) -> dict:
-    """Copy actual WAVs; future changes to the source library cannot change a product."""
+    """Snapshot metadata and immutable WAV content, sharing storage when available."""
     copied = destination.create(
         source.audio_path(item["id"]).read_bytes(),
         name=item["name"],

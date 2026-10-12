@@ -10,7 +10,7 @@ import secrets
 import shutil
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -181,7 +181,7 @@ async def production_voice(
     runtime,
     upload: tuple[str, bytes] | None = None,
 ):
-    private = VoiceLibrary(stage / "voice")
+    private = products().voice_library(stage)
     if upload is not None:
         filename, data = upload
         item = await asyncio.to_thread(
@@ -338,7 +338,7 @@ async def synthesize_upload(
 
 
 async def dialogue_voices(stage, uploads, previous, source_product_id):
-    private, speakers = VoiceLibrary(stage / "voice"), []
+    private, speakers = products().voice_library(stage), []
     if uploads is not None:
         for upload in uploads:
             item = await asyncio.to_thread(
@@ -597,7 +597,7 @@ async def create_production(
                 "production_voice_id": item["id"],
                 "caption": caption,
                 "references": item["references"],
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
                 "provenance": installed_provenance(runtime, "synthesize", health),
                 "production_seconds": time.perf_counter() - started,
                 "metrics": metrics,
@@ -647,6 +647,7 @@ async def create_production(
         finally:
             if stage.exists():
                 await asyncio.to_thread(shutil.rmtree, stage)
+                await asyncio.to_thread(store.references.prune)
     return result
 
 
@@ -729,12 +730,25 @@ async def output_settings(identifier: str):
     return json.loads(path.read_text())
 
 
+class TemporaryArchiveResponse(FileResponse):
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Also remove the ZIP when sending fails or the client disconnects.
+            Path(self.path).unlink(missing_ok=True)
+
+
 @app.get("/api/synthesis/{identifier}/archive")
 async def archive(identifier: str):
-    path = products().directory(identifier) / "product.zip"
-    if not path.is_file():
-        raise HTTPException(404, "旧形式の音声には作品ZIPがありません")
-    return FileResponse(
+    build = asyncio.create_task(asyncio.to_thread(products().archive, identifier))
+    try:
+        path = await asyncio.shield(build)
+    except asyncio.CancelledError:
+        path = await build
+        path.unlink(missing_ok=True)
+        raise
+    return TemporaryArchiveResponse(
         path, media_type="application/zip", filename=f"{identifier}.zip"
     )
 

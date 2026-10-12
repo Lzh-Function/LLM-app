@@ -127,7 +127,7 @@ uv run llm-chat
 CPU単独の初回動作確認ではMF4のRTF約1.09～1.36で、会話向けの目標にはまだ届いていない。
 高品質合成専用の独立UIは`bash voice-synthesize/serve.sh`（リポジトリ直下で実行）、`http://localhost:5080`。
 原稿と声の説明からIrodori LargeまたはQwen3-TTS 1.7BをGPUで使って音声作品を制作し、`voice-synthesize/productions/`へWAV・原稿・設定・作品専用の声を保存する。
-会話用の声登録は不要。登録済みの声を使う場合も作品内へコピーして保存し、ZIPで一式を取得できる。GPU音声がONの間はLLMロードを409で止める。
+会話用の声登録は不要。登録済みの声を使う場合も作品用に保存し、同じ参照WAVはSHA256でハードリンク共有する。ZIPは取得時に一時生成し、一式をダウンロードできる。GPU音声がONの間はLLMロードを409で止める。
 Qwenの導入・声作成・長文制作は[Qwen3-TTSの運用手順](../docs/09-qwen-tts.md)を参照。
 設定・実測・MF/Large比較・Strata同時実行の測定は[Irodoriの運用手順](../docs/08-irodori-tts.md#実装と使い方2026-10-07)を参照。
 

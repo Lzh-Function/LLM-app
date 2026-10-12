@@ -56,8 +56,12 @@ productions/<ID>/
   metadata.json       作品名、モデル、時間・RTF、参照SHA256
   voice/<voice-ID>/   作品専用のWAVと条件（会話ライブラリへの登録なし）
   segments/0001.wav   複数話者作品の生成区間（metadata.jsonに話者・原稿・時刻・条件）
-  product.zip         原稿・設定・完成音声・作品専用の声の一式
+productions/.references/<SHA256>.wav
+                      同じ参照WAVの共有実体
 ```
+
+同じ参照WAVはSHA256ごとに一つだけ保存し、作品内のWAVはハードリンクで共有する。名前・参照文章などの条件は作品ごとに保存する。元作品を削除しても別作品の参照は残り、最後の作品を削除すると未使用の共有WAVも削除する。ハードリンク非対応の保存先ではWAVコピーへフォールバックする。
+作品ZIPはダウンロード時だけ一時生成し、送信後に削除する。合成のたびに完成WAV・参照WAVをZIPへ重複保存しない。ZIPには従来どおり全参照を含め、作品ディレクトリ単体・ZIPともバックアップに使える。既存作品のコピーや常設ZIPは自動変更しない。
 
 保存先は`VOICE_SYNTHESIZE_PRODUCTION_DIR`で変更できる。
 旧`VOICE_SYNTHESIZE_OUTPUT_DIR`は互換設定として利用可能。旧`outputs/`のWAV・条件も一覧・ダウンロード・削除できる。

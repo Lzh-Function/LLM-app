@@ -341,10 +341,12 @@ class StandaloneTest(unittest.IsolatedAsyncioTestCase):
     async def test_failed_rename_archive_keeps_original_product(self):
         first = (await self.client.post("/api/synthesis", json={"text": "原稿"})).json()
         directory = self.root / "productions" / first["id"]
+        # Legacy products may already have a persistent ZIP; keep rename atomic for those.
+        package = await self.client.get(f'/api/synthesis/{first["id"]}/archive')
+        (directory / "product.zip").write_bytes(package.content)
         originals = {file: (directory / file).read_bytes() for file in ("metadata.json", "settings.json", "product.zip")}
-        with patch("llm_chat.synthesis_products.write_archive", side_effect=OSError("disk failure")):
-            with self.assertRaises(OSError):
-                await self.client.patch(f'/api/synthesis/{first["id"]}', json={"name": "変更"})
+        with patch("llm_chat.synthesis_products.write_archive", side_effect=OSError("disk failure")), self.assertRaises(OSError):
+            await self.client.patch(f'/api/synthesis/{first["id"]}', json={"name": "変更"})
         for file, content in originals.items():
             self.assertEqual((directory / file).read_bytes(), content)
         self.assertFalse(list(directory.parent.glob(".rename-*")))
@@ -437,7 +439,9 @@ class StandaloneTest(unittest.IsolatedAsyncioTestCase):
                 files={"file": ("reference.wav", wav(121), "audio/wav")},
             )
         self.assertEqual(response.status_code, 503, response.text)
-        self.assertFalse(list((self.root / "productions").glob("*")))
+        self.assertFalse(list((self.root / "productions").glob("*/metadata.json")))
+        self.assertFalse(list((self.root / "productions").glob(".pending-*")))
+        self.assertFalse(list((self.root / "productions" / ".references").glob("*.wav")))
         self.assertEqual(self.library.list(), [])
 
     async def test_20000_character_manuscript_is_forwarded_and_preserved_in_zip(self):
@@ -585,7 +589,9 @@ class StandaloneTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(response.status_code, 503)
         self.assertEqual((await self.client.get("/api/synthesis")).json()["items"], [])
-        self.assertFalse(list((self.root / "productions").glob("*")))
+        self.assertFalse(list((self.root / "productions").glob("*/metadata.json")))
+        self.assertFalse(list((self.root / "productions").glob(".pending-*")))
+        self.assertFalse(list((self.root / "productions" / ".references").glob("*.wav")))
         self.assertEqual(self.library.list(), [])
 
     async def test_legacy_outputs_remain_readable_and_invalid_source_is_rejected(self):
@@ -634,7 +640,8 @@ class StandaloneTest(unittest.IsolatedAsyncioTestCase):
             ).status_code,
             409,
         )
-        self.assertFalse(list((self.root / "productions").glob("*")))
+        self.assertFalse(list((self.root / "productions").glob("*/metadata.json")))
+        self.assertFalse(list((self.root / "productions").glob(".pending-*")))
 
     async def test_candidates_disabled_runtime_and_invalid_settings_rejected(self):
         item = self.library.create(wav(), name="候補", kind="candidate", provenance={})

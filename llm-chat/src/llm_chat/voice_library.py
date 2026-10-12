@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import uuid
 import wave
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 
@@ -84,9 +86,50 @@ def trim_reference_wav(data: bytes, *, max_seconds: float = 120) -> tuple[bytes,
     return trimmed, info
 
 
-class VoiceLibrary:
+class ReferenceCache:
+    """Immutable WAVs shared by hard links, with one object per content hash."""
+
     def __init__(self, root: Path):
         self.root = root
+
+    @serialized_mutation
+    def write(self, path: Path, data: bytes, signature: str):
+        self.root.mkdir(parents=True, exist_ok=True)
+        source = self.root / f"{signature}.wav"
+        if not source.exists():
+            pending = self.root / f".{uuid.uuid4().hex}.tmp"
+            try:
+                pending.write_bytes(data)
+                pending.replace(source)
+            finally:
+                pending.unlink(missing_ok=True)
+        elif hashlib.sha256(source.read_bytes()).hexdigest() != signature:
+            raise HTTPException(409, "共有参照WAVのSHA256が一致しません")
+        try:
+            os.link(source, path)
+        except OSError as exc:
+            if exc.errno not in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS):
+                raise
+            # A filesystem without hard links still preserves portable products.
+            path.write_bytes(data)
+
+    @serialized_mutation
+    def prune(self):
+        for path in self.root.glob("*.wav"):
+            if path.stat().st_nlink == 1:
+                path.unlink()
+
+
+class VoiceLibrary:
+    def __init__(self, root: Path, *, reference_cache: ReferenceCache | None = None):
+        self.root = root
+        self.reference_cache = reference_cache
+
+    def write_reference(self, path: Path, data: bytes, info: dict):
+        if self.reference_cache is None:
+            path.write_bytes(data)
+        else:
+            self.reference_cache.write(path, data, info["sha256"])
 
     def directory(self, identifier: str) -> Path:
         if not IDENTIFIER.fullmatch(identifier):
@@ -135,14 +178,14 @@ class VoiceLibrary:
         directory = self.directory(identifier)
         directory.mkdir(parents=True)
         try:
-            (directory / "reference.wav").write_bytes(data)
+            self.write_reference(directory / "reference.wav", data, info)
             return self.save(
                 {
                     "id": identifier,
                     "name": name,
                     "kind": kind,
                     "favorite": False,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": datetime.now(UTC).isoformat(),
                     "references": [{"file": "reference.wav", **info}],
                     "provenance": provenance,
                 }
@@ -180,7 +223,7 @@ class VoiceLibrary:
             raise HTTPException(422, "同じ話者の参照は合計120秒以下にしてください")
         filename = f"reference-{uuid.uuid4().hex}.wav"
         path = self.directory(identifier) / filename
-        path.write_bytes(data)
+        self.write_reference(path, data, info)
         item["references"].append(
             {"file": filename, **info, "source": "same-speaker-upload"}
         )
