@@ -1,6 +1,8 @@
 **GLM-5.3／FlashをColab A100で使う実行計画 — 2026-10-12**
 
-[13-colab-glm53-research.md](13-colab-glm53-research.md) の調査を受けて、このruntimeで実際に起動する3変種（通常版Flash・無検閲Flash・通常版GLM-5.3）の配布、エンジン、コンテキスト長、容量予算を決めた文書。ここでは**まだ実装していない**。決めた内容と、Colab側で先に測る必要がある項目を分けて書く。
+[13-colab-glm53-research.md](13-colab-glm53-research.md) の調査を受けて、このruntimeで実際に起動する3変種（通常版Flash・無検閲Flash・通常版GLM-5.3）の配布、エンジン、コンテキスト長、容量予算を決めた文書。決めた内容と、Colab側で先に測る必要がある項目を分けて書く。
+
+実装は [codex/colab-glm](../codex/colab-glm)（起動方法と運用は [README](../codex/colab-glm/README.md)）。この文書は選定の根拠と容量・速度の予算のまま残し、実装と食い違った箇所（Driveの配置、ポート、packの置き場所）は下の「実装」で直している。
 
 容量・速度の判定は公開ファイルサイズと配布者の測定からの推定で、このA100でのロード・推論実測は未実施。実測値は「Colab runtimeで測る項目」にまとめた。
 
@@ -79,12 +81,12 @@ Flashは **131072**。KV cacheが1.13〜1.78GiBしか食わず、Mayaの選択�
 
 ### Project Maya（`flash`）
 
-[mw00/project-maya](https://github.com/mw00/project-maya) v1.1.1、commit `eb9b7ec88d6f7802f15b218b551550f749c7a94a`。A100のsm_80対応、OpenAI／Anthropic APIを `:8080`、tool callのstream対応。
+[mw00/project-maya](https://github.com/mw00/project-maya) v1.1.1、commit `eb9b7ec88d6f7802f15b218b551550f749c7a94a`。A100のsm_80対応、OpenAI／Anthropic APIを既定の `:8080`（このruntimeでは `18081`）、tool callのstream対応。
 
 ```bash
 STRATA_GLM_RAM_RESIDENT=1 STRATA_GLM_KV_INT8=1 STRATA_GLM_RAM_HEADROOM_GB=16 \
   python3 maya.py --yes --model Maya-L --context 131072 --no-vision \
-  --models-dir /content/drive/MyDrive/Strata-data/glm53/models --port 18080 --host 127.0.0.1
+  --models-dir /content/drive/MyDrive/Strata-data/glm53/models --port 18081 --host 127.0.0.1
 ```
 
 - `STRATA_GLM_RAM_RESIDENT=1` はVRAMに載らない全expertをRAM tierに置き、収まらなければ起動に失敗する設定。推論中にディスク／Driveへexpertを読みに行かない構成にできる。[SETTINGS.md](https://github.com/mw00/project-maya/blob/eb9b7ec88d6f7802f15b218b551550f749c7a94a/docs/SETTINGS.md)
@@ -100,8 +102,11 @@ STRATA_GLM_RAM_RESIDENT=1 STRATA_GLM_KV_INT8=1 STRATA_GLM_RAM_HEADROOM_GB=16 \
 ```bash
 llama-server -m models/bolding-iq3_xxs/GLM-5.3-Flash-Uncensored-IQ3_XXS-00001-of-00003.gguf \
   -ngl 99 -cmoe --moe-cache-mib 32768 -fa on -c 131072 -np 1 \
-  --host 127.0.0.1 --port 18080
+  --host 127.0.0.1 --port 18081 --alias glm-5.3-flash-uncensored-iq3_xxs --jinja
 ```
+
+Codexが使う `/v1/responses` は、llama.cppのserver本体とMayaの `serve/server.py` の両方が既に実装している。変換層は要らない。
+起動完了の判定は、llama.cppが `/health` に status しか返さず model と `n_ctx` を `/props` に置くため、`/health` と `/props` の2つを見る。Mayaは `/health` にも model と max_context を持つ。
 
 `full` は `-c 65536`。MTPテンソルを含む配布ではspeculative decodeが使えるが、フラグ名は導入するllama.cppのビルドで確認する（#29928以降で変更されている）。配布者推奨のサンプリングは `--temp 0.7 --min-p 0.05`。2bit級ではgreedyで長い連鎖ループに入ることがあるため。
 
@@ -163,25 +168,30 @@ dd if="/content/drive/MyDrive/Strata-data/models/IQ3_S/..." of=/dev/null bs=16M 
 - `lspci` のLnkStaがGen3 x16（約12〜13GB/s）なら、RAM tier依存のdecodeは遅くなる方向。Gen4 x16なら4090系の公開値に近い挙動を期待できる。
 - `MemAvailable` が167GiBより大きく減っているruntimeなら、起動前に他セッションを止める。
 
-## 実装方針（`colab-glm`）
+## 実装（`colab-glm`）
 
 [codex/colab-qwen](../codex/colab-qwen) の作りを踏襲する。`manifest.json` に `variants` と `default_variant` を置き、`--variant` で起動時に選び、未取得分だけを初回にDriveへダウンロードしてSHA-256で検証する。保存先は `/content/drive/MyDrive/Strata-data/glm53/` に変種別フォルダを分ける。
+エンジンはMayaとllama.cppの2系統で、ビルド済み成果物もDriveにキャッシュする。
 
 ```
 MyDrive/Strata-data/glm53/
-├── models/maya-l/            Maya-L 4分割（145.58GiB）
+├── models/Maya-L/            Maya-L 4分割（145.58GiB）と pack/
 ├── models/bolding-iq3_xxs/   IQ3_XXS 3分割（125.08GiB）
 ├── models/slim-e192/         SLIM-E192 4分割（149.72GiB）
-├── packs/                    Mayaのpack（GGUFから生成する派生データ）
-└── engines/                  ビルド済みエンジン（commit名でキャッシュ）
+└── engines/
+    ├── llama-<sig>/llama-server
+    └── maya-<sig>/{strata, MAYA-BUILD.json}
 ```
 
-Qwenのruntimeと同じく、保存先はDrive内のみ（SSDフォールバックなし）、ポート競合はビルド・ダウンロード前に失敗、失敗時はruntime stopまで行う、を維持する。エンジンがMayaとllama.cppで2系統になる分、`engines/` のキャッシュキーにエンジン名とcommitを入れる。
+`models/Maya-L/` はMaya自身の配置（`--models-dir` の下にモデル名のフォルダ）で、**packはGGUFと同じフォルダに `pack/` として生成される**。Qwenのような `packs/` フォルダは作らない。packは全テンソルのインデックスと小さなfloat重み・tokenizer（合計1〜2GB）で、expertはGGUFに残る。Mayaは `pack/native_experts.txt` が同じGGUFを指し、`PACK_FILES` が揃っていれば作り直さない。
+`<sig>` はエンジン種別・固定commit・nvccのパスとバージョン・libc・CPU flagsのSHA-256先頭20桁。ColabのCUDAツールキットが変わった時だけ再ビルドになる。Maya側は `build/strata` と `MAYA-BUILD.json` をそのまま復元し、Maya自身のstamp検査（source hashとarchs）を通す。
+llama.cppは `cmake -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=80` で `llama-server` だけを作り、Mayaは `maya.py --yes --no-start` でセットアップした後に `--config` で起動する2段構えにする（`--no-start` だけだとdashboard起動を飛ばせないため）。
+Qwenのruntimeと同じく、保存先はDrive内のみ（SSDフォールバックなし）、ポート競合はビルド・ダウンロード前に失敗、失敗時はruntime stopまで行う、を維持する。
 
 **全変種をDriveに置くとGGUFだけで約420GiB**（145.58 + 125.08 + 149.72）。Qwen両変種（約167GB）とGLM 3変種を置いても約600GB級で、Driveの空きはこのruntimeの制約にならない。
 
 ## 決まっていないこと
 
-1. `full` を SLIM-E192（pruned・MTPなし）と UD-IQ1_S（未改変・MTPあり・余裕44.61GiB）のどちらにするか。実測速度が出るまで決めきれない。
+1. ~~`full` を SLIM-E192（pruned・MTPなし）と UD-IQ1_S（未改変・MTPあり・余裕44.61GiB）のどちらにするか。~~ **SLIM-E192に決めた。** UD-IQ1_Sは余裕44.61GiBでprefill bufferとcompute bufferが置けず、IQ1_Sの品質保持は72.6%。A100の実測が出たら、速度が低一桁ならUD-IQ1_S側を `--gguf-dir` 抜きで別variantとして足す余地は残す。
 2. Mayaの `STRATA_GLM_PROMOTE_MIN` などのチューニングを既定に入れるか。A100での測定がない。
 3. Colabの一時ディスク容量とDrive読み帯域。上のprobeで確定する。
