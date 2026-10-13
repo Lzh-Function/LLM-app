@@ -108,18 +108,67 @@ class DownloadTests(unittest.TestCase):
         self.fetch()
         self.path.write_bytes(b'x' * len(PAYLOAD))
         with self.assertRaisesRegex(RuntimeError, 'Existing file fails verification'):
-            self.fetch()
+            self.fetch(skip_cache_mtime=False)
 
     def test_drive_sync_timestamp_change_rechecks_content_without_download(self):
         self.fetch()
         timestamp = self.path.stat().st_mtime_ns + 180_000_000_000
         session.os.utime(self.path, ns=(timestamp, timestamp))
         with patch.object(remote, 'digest', wraps=remote.digest) as verify:
-            self.fetch()
+            self.fetch(skip_cache_mtime=False)
             verify.assert_called_once_with(self.path)
         self.assertEqual(len(Handler.ranges), 1)
         marker = self.path.with_name('model.gguf.verified.json')
         self.assertEqual(json.loads(marker.read_text())['mtime_ns'], self.path.stat().st_mtime_ns)
+
+    def test_default_reuses_verified_cache_without_hashing_or_rewriting_record(self):
+        self.fetch()
+        marker = self.path.with_name('model.gguf.verified.json')
+        previous = marker.read_text()
+        timestamp = self.path.stat().st_mtime_ns + 180_000_000_000
+        session.os.utime(self.path, ns=(timestamp, timestamp))
+        with patch.object(remote, 'digest') as digest:
+            self.fetch()
+            digest.assert_not_called()
+        self.assertEqual(marker.read_text(), previous)
+        self.assertEqual(len(Handler.ranges), 1)
+
+    def test_reverify_overrides_skip_mtime_and_detects_same_size_changes(self):
+        self.fetch()
+        self.path.write_bytes(b'x' * len(PAYLOAD))
+        with patch.object(remote, 'digest', wraps=remote.digest) as digest:
+            with self.assertRaisesRegex(RuntimeError, 'Existing file fails verification'):
+                self.fetch(reverify=True)
+            digest.assert_called_once_with(self.path)
+
+    def test_skip_mtime_still_requires_matching_size_and_sha_record(self):
+        self.fetch()
+        marker = self.path.with_name('model.gguf.verified.json')
+        invalid = [None, '{', '[]',
+                   json.dumps({'size': len(PAYLOAD), 'sha256': '0' * 64}),
+                   json.dumps({'size': len(PAYLOAD) + 1, 'sha256': hashlib.sha256(PAYLOAD).hexdigest()})]
+        for record in invalid:
+            with self.subTest(record=record):
+                if record is None:
+                    marker.unlink()
+                else:
+                    marker.write_text(record)
+                with patch.object(remote, 'digest', wraps=remote.digest) as digest:
+                    self.fetch(skip_cache_mtime=True)
+                    digest.assert_called_once_with(self.path)
+        self.assertEqual(len(Handler.ranges), 1)
+
+    def test_skip_mtime_rejects_a_truncated_file(self):
+        self.fetch()
+        self.path.write_bytes(PAYLOAD[:-1])
+        with self.assertRaisesRegex(RuntimeError, 'Existing file fails verification'):
+            self.fetch(skip_cache_mtime=True)
+
+    def test_skip_mtime_preserves_initial_download_hash_verification(self):
+        with patch.object(remote, 'digest', wraps=remote.digest) as digest:
+            self.fetch(skip_cache_mtime=True)
+            digest.assert_called_once_with(self.partial)
+        self.assertEqual(self.path.read_bytes(), PAYLOAD)
 
     def test_unmounted_drive_refused_before_directory_creation(self):
         destination = Path(self.tmp.name) / 'weights'
@@ -132,8 +181,22 @@ class DownloadTests(unittest.TestCase):
         drive = Path(self.tmp.name) / 'drive'
         (drive / 'MyDrive').mkdir(parents=True)
         with patch.object(remote, 'DRIVE', drive), patch.object(Path, 'is_mount', return_value=True):
-            with self.assertRaisesRegex(RuntimeError, 'SSD fallback'):
+            with self.assertRaisesRegex(RuntimeError, 'Persistent model destination'):
                 remote.ensure_drive(Path(self.tmp.name) / 'ssd')
+
+
+class CacheOptionTests(unittest.TestCase):
+    def test_local_cli_defaults_and_explicit_overrides(self):
+        for flags, skip, reverify in [([], True, False), (['--skip-cache-mtime'], True, False),
+                                     (['--no-skip-cache-mtime'], False, False), (['--reverify'], True, True)]:
+            with self.subTest(flags=flags), tempfile.TemporaryDirectory() as work, \
+                 patch.object(session, 'STATE', Path(work)), \
+                 patch.object(sys, 'argv', ['session.py', 'stop', *flags]), \
+                 patch.object(session, 'stop') as stop:
+                self.assertEqual(session.main(), 0)
+                args = stop.call_args.args[0]
+                self.assertEqual(args.skip_cache_mtime, skip)
+                self.assertEqual(args.reverify, reverify)
 
 
 class ManifestTests(unittest.TestCase):
@@ -420,7 +483,7 @@ class EngineCacheTests(unittest.TestCase):
             self.assertEqual((source / 'build' / 'strata').read_bytes(), b'engine')
             self.assertIn('Cached A100 Maya engine for the next run:', output.getvalue())
 
-    def run_main(self, variant, work):
+    def run_main(self, variant, work, extra=(), *, use_ssd=False):
         calls = []
         chdirs = []
 
@@ -428,20 +491,32 @@ class EngineCacheTests(unittest.TestCase):
             calls.append(argv)
             raise SystemExit(0)
 
+        def serve_private(argv, cwd):
+            chdirs.append(cwd)
+            execv(argv[0], list(map(str, argv)))
+
         (Path(work) / 'manifest.json').write_text(json.dumps(self.manifest))
+        data = Path(work) / 'drive'
+        config = Path(work) / 'maya-maya-l.json'
+        pack = data / 'models' / 'Maya-L' / 'pack'
+        config.write_text(json.dumps({'args': ['--glm-pack', str(pack)],
+                                      'tokenizer': str(pack / 'tokenizer'),
+                                      'installer': {'models_dir': str(data / 'models')}}))
         with patch.object(remote, 'WORK', Path(work)), \
              patch.object(remote, 'ensure_drive', return_value=Path(work) / 'drive'), \
              patch.object(remote, 'check_server_port'), patch.object(remote, 'check_drive_space'), \
+             patch.object(remote, 'check_privacy'), \
              patch.object(remote, 'check_accelerator'), patch.object(remote, 'check_ram'), \
              patch.object(remote.os, 'chdir', side_effect=lambda path: chdirs.append(path)), \
              patch.object(remote.shutil, 'which', return_value='/usr/bin/nvcc'), \
              patch.object(remote.subprocess, 'check_output', return_value='nvcc'), \
              patch.object(remote, 'engine_signature', return_value='sig'), \
              patch.object(remote, 'fetch_verified') as fetch, \
+             patch.object(remote, 'stage_model_on_ssd', return_value=(Path(work) / 'model-data' if use_ssd else data)), \
              patch.object(remote, 'llama_server', return_value=Path('/content/glm53-a100/llama.cpp/build/bin/llama-server')), \
-             patch.object(remote, 'maya_setup', return_value=(Path('/venv/bin/python'), Path('/maya'), Path('/maya/maya-maya-l.json'))), \
-             patch.object(remote.os, 'execv', side_effect=execv), \
-             patch.object(sys, 'argv', ['remote.py', '--variant', variant]), \
+             patch.object(remote, 'maya_setup', return_value=(Path('/venv/bin/python'), Path('/maya'), config)), \
+             patch.object(remote, 'serve_private', side_effect=serve_private), \
+             patch.object(sys, 'argv', ['remote.py', '--variant', variant, *extra]), \
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(SystemExit):
                 remote.main()
@@ -453,21 +528,47 @@ class EngineCacheTests(unittest.TestCase):
         self.assertEqual(argv[0], '/content/glm53-a100/llama.cpp/build/bin/llama-server')
         self.assertEqual(argv[argv.index('-m') + 1],
                          str(Path(work) / 'drive' / 'models/slim-e192/GLM-5.3-Q2-DGX-Spark-00001-of-00004.gguf'))
-        self.assertEqual(argv[argv.index('-c') + 1], 65536)
+        self.assertEqual(argv[argv.index('-c') + 1], '65536')
         self.assertEqual(argv[argv.index('--alias') + 1], 'glm-5.3-slim-e192')
-        self.assertEqual(argv[argv.index('--port') + 1], 18081)
+        self.assertEqual(argv[argv.index('--port') + 1], '18081')
+        self.assertIn('--log-disable', argv)
+        self.assertIn('--metrics', argv)
         self.assertEqual(len(fetch.call_args_list), 4)
 
     def test_maya_variant_starts_from_the_generated_config(self):
         with tempfile.TemporaryDirectory() as work:
             argv, fetch, chdirs = self.run_main('flash', work)
         self.assertEqual(argv[0], '/venv/bin/python')
-        self.assertEqual(argv[1], '/maya/maya.py')
-        self.assertEqual(argv[argv.index('--config') + 1], '/maya/maya-maya-l.json')
+        self.assertEqual(argv[1], '/maya/serve/server.py')
+        self.assertEqual(argv[argv.index('--engine') + 1], 'strata')
+        self.assertTrue(argv[argv.index('--config') + 1].endswith('/maya-maya-l.json'))
         self.assertEqual(argv[argv.index('--port') + 1], '18081')
         # Maya resolves its own relative paths, so the server starts from its own tree.
         self.assertEqual(chdirs, [Path('/maya')])
         self.assertEqual(len(fetch.call_args_list), 4)
+
+    def test_llama_variant_uses_ssd_shards_after_successful_staging(self):
+        with tempfile.TemporaryDirectory() as work:
+            argv, _, _ = self.run_main('full', work, use_ssd=True)
+            self.assertEqual(argv[argv.index('-m') + 1],
+                             str(Path(work) / 'model-data' / self.manifest['variants']['full']['llama']['first_shard']))
+
+    def test_maya_variant_repoints_pack_and_tokenizer_only_after_ssd_staging(self):
+        with tempfile.TemporaryDirectory() as work:
+            argv, _, _ = self.run_main('flash', work, use_ssd=True)
+            config = json.loads(Path(argv[argv.index('--config') + 1]).read_text())
+            pack = Path(work) / 'model-data' / 'models' / 'Maya-L' / 'pack'
+            self.assertEqual(config['args'][config['args'].index('--glm-pack') + 1], str(pack))
+            self.assertEqual(config['tokenizer'], str(pack / 'tokenizer'))
+            self.assertEqual(config['installer']['models_dir'], str(Path(work) / 'model-data' / 'models'))
+
+    def test_maya_config_write_failure_keeps_the_drive_paths(self):
+        with tempfile.TemporaryDirectory() as work, \
+             patch.object(remote, 'repoint_maya_config', side_effect=OSError(28, 'No space left on device')):
+            argv, _, _ = self.run_main('flash', work, use_ssd=True)
+            config = json.loads(Path(argv[argv.index('--config') + 1]).read_text())
+            self.assertEqual(config['args'][config['args'].index('--glm-pack') + 1],
+                             str(Path(work) / 'drive' / 'models' / 'Maya-L' / 'pack'))
 
     def run_prepare(self, argv, work):
         (Path(work) / 'manifest.json').write_text(json.dumps(self.manifest))
@@ -487,10 +588,24 @@ class EngineCacheTests(unittest.TestCase):
             remote.main()
         return fetch, llama, maya, execv, output.getvalue()
 
+    def test_serving_passes_skip_mtime_to_every_model_shard(self):
+        with tempfile.TemporaryDirectory() as work:
+            _, fetch, _ = self.run_main('full', work)
+        self.assertTrue(fetch.call_args_list)
+        self.assertTrue(all(call.kwargs['skip_cache_mtime'] for call in fetch.call_args_list))
+
+    def test_prepare_passes_skip_mtime_and_reverify_to_every_variant(self):
+        with tempfile.TemporaryDirectory() as work:
+            fetch, _, _, _, _ = self.run_prepare(['--prepare', '--reverify'], work)
+        self.assertTrue(fetch.call_args_list)
+        self.assertTrue(all(call.kwargs['skip_cache_mtime'] and call.kwargs['reverify']
+                            for call in fetch.call_args_list))
+
     def test_prepare_without_variant_fetches_all_variants_and_starts_nothing(self):
         with tempfile.TemporaryDirectory() as work:
             fetch, llama, maya, execv, output = self.run_prepare(['--prepare'], work)
         self.assertEqual(execv.call_count, 0)          # prepare never becomes a server
+        self.assertTrue(all(call.kwargs['skip_cache_mtime'] for call in fetch.call_args_list))
         self.assertEqual(maya.call_count, 1)           # Maya's setup also writes the pack
         self.assertEqual(llama.call_count, 2)          # the second llama variant reuses the cached binary
         self.assertEqual(len(fetch.call_args_list), sum(len(v['files']) for v in self.manifest['variants'].values()))
@@ -501,6 +616,78 @@ class EngineCacheTests(unittest.TestCase):
             fetch, llama, maya, execv, output = self.run_prepare(['--prepare', '--variant', 'full', '--context', '32768'], work)
         self.assertEqual((maya.call_count, llama.call_count, len(fetch.call_args_list)), (0, 1, 4))
         self.assertIn('GLM_PREPARE_COMPLETE ["full"]', output)
+
+
+class RuntimeModelStagingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.work = Path(self.tmp.name) / 'runtime'
+        self.data = Path(self.tmp.name) / 'drive'
+        self.work.mkdir()
+        self.data.mkdir()
+        self.files = [('models/Maya-L/first.gguf', b'first verified shard'),
+                      ('models/Maya-L/second.gguf', b'second verified shard')]
+        self.profile = {'files': []}
+        for relative, payload in self.files:
+            path = self.data / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+            self.profile['files'].append({'destination': relative, 'size': len(payload),
+                                          'sha256': hashlib.sha256(payload).hexdigest()})
+
+    def test_complete_model_and_maya_pack_are_copied_to_ssd(self):
+        pack = self.data / 'models' / 'Maya-L' / 'pack'
+        for name in remote.MAYA_PACK_FILES:
+            path = pack / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(name.encode())
+        with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 1), \
+             contextlib.redirect_stdout(io.StringIO()):
+            selected = remote.stage_model_on_ssd(self.data, self.profile, pack)
+        self.assertEqual(selected, self.work / 'model-data')
+        for relative, payload in self.files:
+            self.assertEqual((selected / relative).read_bytes(), payload)
+        for name in remote.MAYA_PACK_FILES:
+            self.assertEqual((selected / 'models' / 'Maya-L' / 'pack' / name).read_bytes(), name.encode())
+        self.assertFalse(list(selected.rglob('*.part')))
+
+    def test_disk_capacity_failure_falls_back_and_removes_partial_copy(self):
+        original = remote.copy_model_file
+        attempts = 0
+
+        def fail_second(source, destination, size, sha256):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 2:
+                raise OSError(28, 'No space left on device')
+            return original(source, destination, size, sha256)
+
+        with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 1), \
+             patch.object(remote, 'copy_model_file', side_effect=fail_second), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            selected = remote.stage_model_on_ssd(self.data, self.profile)
+        self.assertEqual(selected, self.data)
+        self.assertEqual(attempts, 2)
+        self.assertFalse((self.work / 'model-data').exists())
+        self.assertIn('using Google Drive model files', output.getvalue())
+        for relative, payload in self.files:
+            self.assertEqual((self.data / relative).read_bytes(), payload)
+
+    def test_low_runtime_reserve_falls_back_without_touching_drive(self):
+        with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 5), \
+             patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=4)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(remote.stage_model_on_ssd(self.data, self.profile), self.data)
+        self.assertFalse((self.work / 'model-data').exists())
+
+    def test_sha_mismatch_stops_instead_of_serving_corrupt_drive_source(self):
+        self.profile['files'][0]['sha256'] = '0' * 64
+        with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 1), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(remote.ModelCopyIntegrityError):
+                remote.stage_model_on_ssd(self.data, self.profile)
+        self.assertFalse((self.work / 'model-data').exists())
 
 
 class HealthTests(unittest.TestCase):
@@ -616,6 +803,57 @@ class BootstrapLogTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_idempotent_setup_reconnects_after_a_client_timeout(self):
+        instance = session.Session(None)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(session, 'STATE', Path(directory)), \
+             patch.object(session.uuid, 'uuid4', return_value=SimpleNamespace(hex='fixed')), \
+             patch.object(instance, 'colab', side_effect=[session.CommandTimeout('connection wait'),
+                                                        'prepared\nGLM_EXEC_OK_fixed\n']) as colab, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(instance.code('pass', timeout=120, retry_safe=True,
+                                           stage='runtime再接続・準備', quiet=True), 'prepared')
+            self.assertEqual(colab.call_count, 2)
+            self.assertTrue(all(call.kwargs['timeout'] == 120 for call in colab.call_args_list))
+
+    def test_reconnect_attempts_are_bounded_and_preserve_the_failed_stage(self):
+        instance = session.Session(None)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(session, 'STATE', Path(directory)), \
+             patch.object(instance, 'colab', side_effect=session.CommandTimeout('connection wait')) as colab, \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(session.CommandTimeout, 'runtime再接続・準備'):
+                instance.code('pass', timeout=120, retry_safe=True, stage='runtime再接続・準備')
+            self.assertEqual(colab.call_count, 3)
+            record = json.loads((Path(directory) / 'setup-error.json').read_text())
+            self.assertEqual(record['stage'], 'runtime再接続・準備')
+            self.assertEqual(record['attempt'], 3)
+            self.assertEqual(record['timeout_seconds'], 120)
+            self.assertEqual(record['error_type'], 'CommandTimeout')
+
+    def test_bootstrap_and_flush_are_not_blindly_retried(self):
+        instance = session.Session(None)
+        for stage in ['モデル準備プロセス起動', 'GDrive同期']:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory, \
+                 patch.object(session, 'STATE', Path(directory)), \
+                 patch.object(instance, 'colab', side_effect=session.CommandTimeout('connection wait')) as colab:
+                with self.assertRaises(session.CommandTimeout):
+                    instance.code('pass', stage=stage)
+                colab.assert_called_once()
+
+    def test_remote_python_failure_is_not_retried_as_a_connection_timeout(self):
+        instance = session.Session(None)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(session, 'STATE', Path(directory)), \
+             patch.object(instance, 'colab', return_value='Traceback\nValueError: failed\n') as colab, \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, 'Python'):
+                instance.code('pass', retry_safe=True)
+            colab.assert_called_once()
+            self.assertEqual(json.loads((Path(directory) / 'setup-error.json').read_text())['error_type'],
+                             'IncompleteExecution')
+
+
     def test_prepare_rejects_explicit_failure_even_with_completion_in_same_poll(self):
         instance = session.Session(SimpleNamespace(startup_minutes=1))
         instance.master = Mock()
@@ -633,7 +871,7 @@ class LifecycleTests(unittest.TestCase):
     def test_start_tunnel_and_bootstrap_use_dedicated_port_and_variant(self):
         manifest = session.manifest()
         args = SimpleNamespace(port=8086, context=65536, data_dir='/content/drive/MyDrive/GLM53-data',
-                               reverify=False, startup_minutes=1, variant='full')
+                               reverify=False, startup_minutes=1, variant='full', skip_cache_mtime=True)
         instance = session.Session(args)
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / 'id_ed25519').touch()
@@ -660,6 +898,7 @@ class LifecycleTests(unittest.TestCase):
             uploaded = [call.args[4] for call in colab.call_args_list]
             self.assertIn('content/glm53-a100/manifest.json', uploaded)
             self.assertIn('content/glm53-a100/remote.py', uploaded)
+            self.assertIn('content/glm53-a100/colab_privacy.py', uploaded)
 
     def prepare_start(self, args):
         """Run the prepare path against a fake runtime and hand back what it asked for."""
@@ -684,6 +923,9 @@ class LifecycleTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             (Path(directory) / 'id_ed25519').touch()  # the runtime key already exists; no ssh-keygen run
             instance.start(prepare=True)
+        preparation = next(call for call in code.call_args_list if 'mkdir(exist_ok=True)' in call.args[0])
+        self.assertEqual(preparation.kwargs['timeout'], 120)
+        self.assertTrue(preparation.kwargs['retry_safe'])
         launched = [call.args[0] for call in code.call_args_list]
         return {'command': popen.call_args.args[0],
                 'bootstrap': next(text for text in launched if 'bootstrap.pid' in text),
@@ -702,25 +944,26 @@ class LifecycleTests(unittest.TestCase):
 
     def test_prepare_of_one_variant_passes_variant_and_context(self):
         args = SimpleNamespace(port=8086, context=32768, data_dir='/content/drive/MyDrive/GLM53-data',
-                               reverify=True, startup_minutes=1, variant='full')
+                               reverify=True, startup_minutes=1, variant='full', skip_cache_mtime=True)
         started = self.prepare_start(args)
         self.assertIn("'--prepare'", started['bootstrap'])
         self.assertIn("'--variant', 'full'", started['bootstrap'])
         self.assertIn("'--context', '32768'", started['bootstrap'])
         self.assertIn("'--reverify'", started['bootstrap'])
+        self.assertIn("'--skip-cache-mtime'", started['bootstrap'])
 
     def test_close_flushes_before_stopping_owned_runtime(self):
         instance = session.Session(None)
         instance.owned = instance.drive_mounted = True
         actions = []
-        with patch.object(instance, 'flush_drive', side_effect=lambda: actions.append('flush')), \
+        with patch.object(instance, 'flush_drive', side_effect=lambda: (actions.append('flush') or True)), \
              patch.object(session, 'stop_runtime', side_effect=lambda: actions.append('stop')), \
              patch.object(signal, 'signal'), patch.object(signal, 'alarm'), \
              contextlib.redirect_stdout(io.StringIO()):
             instance.close()
         self.assertEqual(actions, ['flush', 'stop'])
 
-    def test_close_stops_runtime_even_if_flush_crashes(self):
+    def test_close_preserves_runtime_if_flush_crashes(self):
         instance = session.Session(None)
         instance.owned = instance.drive_mounted = True
         with patch.object(instance, 'flush_drive', side_effect=OSError('disk full')), \
@@ -729,7 +972,47 @@ class LifecycleTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(OSError):
                 instance.close()
+            stop.assert_not_called()
+
+    def test_orphan_stop_preserves_runtime_if_flush_fails(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(session, 'STATE', Path(directory)), \
+             patch.object(session.subprocess, 'run', return_value=SimpleNamespace(stdout='active')), \
+             patch.object(session.Session, 'flush_drive', return_value=False), \
+             patch.object(session, 'stop_runtime') as stop:
+            with self.assertRaisesRegex(RuntimeError, '停止していません'):
+                session.stop()
+            stop.assert_not_called()
+
+    def test_stop_timeout_preserves_active_owner_and_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'session.json').write_text(json.dumps({'pid': 1234, 'identity': 'owner'}))
+            with patch.object(session, 'STATE', Path(directory)), \
+                 patch.object(session, 'proc_identity', return_value='owner'), \
+                 patch.object(session.os, 'kill'), \
+                 patch.object(session.time, 'monotonic', side_effect=[0, 0, 100000]), \
+                 patch.object(session, 'stop_runtime') as stop:
+                with self.assertRaisesRegex(RuntimeError, 'runtimeを残しています'):
+                    session.stop()
+                stop.assert_not_called()
+
+    def test_force_stop_is_the_explicit_sync_bypass(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(session, 'STATE', Path(directory)), \
+             patch.object(session.Session, 'flush_drive') as flush, \
+             patch.object(session, 'stop_runtime') as stop:
+            session.stop(SimpleNamespace(force=True))
+            flush.assert_not_called()
             stop.assert_called_once()
+
+    def test_default_flush_uses_colabs_24_hour_wait(self):
+        instance = session.Session(None)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(session, 'STATE', Path(directory)), \
+             patch.object(instance, 'code', return_value='GLM_DRIVE_SYNC=flushed') as code, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(instance.flush_drive())
+            self.assertEqual(code.call_args.kwargs['timeout'], 86400 + 180)
 
     def test_flush_success_records_confirmation(self):
         instance = session.Session(SimpleNamespace(flush_minutes=2))
@@ -739,11 +1022,11 @@ class LifecycleTests(unittest.TestCase):
              patch.object(instance, 'code', return_value='GLM_DRIVE_SYNC=flushed') as code, \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(instance.flush_drive())
-            self.assertEqual(code.call_args.kwargs['timeout'], 150)
+            self.assertEqual(code.call_args.kwargs['timeout'], 300)
             self.assertTrue(json.loads((Path(directory) / 'drive-sync-status.json').read_text())['confirmed'])
             self.assertFalse(instance.drive_mounted)
 
-    def test_flush_timeout_records_failure_and_still_stops(self):
+    def test_flush_timeout_preserves_unsynced_runtime(self):
         instance = session.Session(SimpleNamespace(flush_minutes=2))
         instance.owned = instance.drive_mounted = True
         with tempfile.TemporaryDirectory() as directory, \
@@ -753,7 +1036,7 @@ class LifecycleTests(unittest.TestCase):
              patch.object(signal, 'signal'), patch.object(signal, 'alarm'), \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(instance.close())
-            stop.assert_called_once()
+            stop.assert_not_called()
             self.assertFalse(json.loads((Path(directory) / 'drive-sync-status.json').read_text())['confirmed'])
 
     def test_stop_waits_for_owner_sync_before_calling_runtime_stop(self):
@@ -768,6 +1051,8 @@ class LifecycleTests(unittest.TestCase):
                  patch.object(session.time, 'monotonic', side_effect=lambda: next(ticks)), \
                  patch.object(session.time, 'sleep') as sleep, \
                  patch.object(session, 'stop_runtime', side_effect=lambda: actions.append('stop')), \
+                 patch.object(session.subprocess, 'run', return_value=SimpleNamespace(stdout='active')), \
+                 patch.object(session.Session, 'flush_drive', return_value=True), \
                  contextlib.redirect_stdout(io.StringIO()):
                 session.stop()
             self.assertEqual(actions, ['signal', 'stop'])
@@ -933,7 +1218,9 @@ class DriveHelperTests(unittest.TestCase):
         actions = []
         colab.drive = SimpleNamespace(flush_and_unmount=lambda **kwargs: actions.append(('flush', kwargs)))
         google.colab = colab
-        with patch.dict(sys.modules, {'google': google, 'google.colab': colab}), \
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(shutdown_remote, 'WORK', Path(directory)), \
+             patch.dict(sys.modules, {'google': google, 'google.colab': colab}), \
              patch.object(shutdown_remote, 'stop_bootstrap', side_effect=lambda: actions.append(('stop', {}))), \
              patch.object(shutdown_remote.os.path, 'ismount', return_value=True):
             self.assertEqual(shutdown_remote.shutdown(45), 'flushed')
@@ -943,11 +1230,46 @@ class DriveHelperTests(unittest.TestCase):
         import types
         colab = types.ModuleType('google.colab')
         colab.drive = Mock()
-        with patch.dict(sys.modules, {'google.colab': colab}), \
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(shutdown_remote, 'WORK', Path(directory)), \
+             patch.dict(sys.modules, {'google.colab': colab}), \
              patch.object(shutdown_remote, 'stop_bootstrap'), \
              patch.object(shutdown_remote.os.path, 'ismount', return_value=False):
             self.assertEqual(shutdown_remote.shutdown(45), 'not_mounted')
         colab.drive.flush_and_unmount.assert_not_called()
+
+    def test_detached_failed_flush_restarts_cached_drive_before_retry(self):
+        import types
+        colab = types.ModuleType('google.colab')
+        colab.drive = Mock()
+        colab.drive._env.return_value = SimpleNamespace(root_dir='/')
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            (work / 'drive-sync-status.json').write_text('{"confirmed": false}')
+            with patch.dict(sys.modules, {'google.colab': colab}), \
+                 patch.object(shutdown_remote, 'WORK', work), \
+                 patch.object(shutdown_remote, 'stop_bootstrap'), \
+                 patch.object(shutdown_remote.os.path, 'ismount', return_value=False), \
+                 patch.object(shutdown_remote, 'drive_daemon_running', return_value=False), \
+                 patch.object(shutdown_remote, 'recover_drive') as recover:
+                self.assertEqual(shutdown_remote.shutdown(90), 'flushed')
+                recover.assert_called_once()
+                colab.drive.flush_and_unmount.assert_called_once_with(timeout_ms=90000)
+                self.assertTrue(json.loads((work / 'drive-sync-status.json').read_text())['confirmed'])
+
+    def test_failed_flush_leaves_pending_marker_for_retry(self):
+        import types
+        colab = types.ModuleType('google.colab')
+        colab.drive = Mock()
+        colab.drive.flush_and_unmount.side_effect = ValueError('flush failed')
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(sys.modules, {'google.colab': colab}), \
+             patch.object(shutdown_remote, 'WORK', Path(directory)), \
+             patch.object(shutdown_remote, 'stop_bootstrap'), \
+             patch.object(shutdown_remote.os.path, 'ismount', return_value=True):
+            with self.assertRaises(ValueError):
+                shutdown_remote.shutdown(90)
+            self.assertFalse(json.loads((Path(directory) / 'drive-sync-status.json').read_text())['confirmed'])
 
     def test_stale_bootstrap_pid_cannot_kill_another_process(self):
         with tempfile.TemporaryDirectory() as directory:

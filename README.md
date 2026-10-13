@@ -22,6 +22,7 @@ WSL2 + Dev Container 上で、llama.cpp・Prism ML・Strata を使って LLM を
 | **音声会話** · チャット内 | マイク録音の文字起こし、AivisSpeech / VOICEVOX / Irodori による読み上げ、声ライブラリ | [音声チャット](docs/06-voice-chat.md) / [Irodori](docs/08-irodori-tts.md) |
 | **音声作品制作** · `localhost:5080` | 声の説明や参照 WAV から長文合成、複数話者の原稿、作品の保存・再制作・ZIP 出力 | [voice-synthesize](voice-synthesize/README.md) |
 | **ローカル Codex** · ターミナル | Flash Next / Qwen3.5-9B / Bonsai 2 を専用プロファイルで利用、検索 MCP と入出力の全文記録 | [Codex 連携](codex/README.md) |
+| **リソース監視** · `localhost:5090` | ローカル・ColabのCPU / GPU / RAM / VRAM / ディスク / 温度と、モデル情報・トークン速度を一覧表示 | [LLM Observatory](resource-dashboard/README.md) |
 
 ## 使い始める
 

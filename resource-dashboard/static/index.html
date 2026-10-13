@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="ローカルとColabのLLM、ハードウェア、生成速度を一つの画面で監視。">
+  <title>LLM Observatory · リソースダッシュボード</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="LLM Observatory ホーム"><span class="brand-mark">◈</span><span>LLM<span class="brand-sub">OBSERVATORY</span></span></a>
+      <div class="workspace-label"><span class="status-dot"></span> ワークスペース</div>
+      <nav class="main-nav" aria-label="表示切り替え">
+        <button class="nav-item active" data-view="overview"><span aria-hidden="true">▦</span> リソース概要</button>
+        <button class="nav-item" data-view="models"><span aria-hidden="true">◇</span> モデル</button>
+        <button class="nav-item" data-view="connections"><span aria-hidden="true">⌘</span> 接続管理</button>
+      </nav>
+      <div class="sidebar-section-label">MONITORING TARGETS <span id="target-count">03</span></div>
+      <nav id="target-list" aria-label="監視対象"><div class="loading-line">接続状況を確認しています…</div></nav>
+      <button class="add-connection" id="add-connection"><span>＋</span> API接続を追加</button>
+      <div class="sidebar-bottom"><span class="small-shield" aria-hidden="true">♢</span><div>メトリクスのみを監視<small>会話本文は取得しません</small></div><span class="version">v1.0</span></div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="breadcrumbs">WORKSPACE <span>/</span> <span id="breadcrumb">リソース概要</span></div>
+        <div class="topbar-actions"><span id="live-indicator" class="live-indicator"><span class="status-dot"></span> LIVE</span><span class="update-time" id="update-time">接続中</span><button class="icon-button" id="pause" aria-label="表示の更新を一時停止" title="表示の更新を一時停止">Ⅱ</button><button class="icon-button" id="refresh" aria-label="今すぐ更新" title="今すぐ更新">↻</button></div>
+      </header>
+      <div class="page-content">
+        <div id="global-error" class="notice danger" role="status" hidden></div>
+        <section class="page-heading"><div><div class="eyebrow" id="heading-eyebrow">RESOURCE OVERVIEW</div><h1 id="page-title">リソース概要</h1><p id="page-description">ローカルとColab。推論の状態を、一つの画面で。</p></div><button class="secondary-button" id="export"><span aria-hidden="true">↓</span> スナップショット</button></section>
+
+        <div id="overview-view">
+          <section class="host-strip"><div class="host-heading"><span class="host-icon" id="host-icon" aria-hidden="true">⌁</span><div><h2 id="host-name">接続を確認中</h2><div class="host-subline" id="host-detail">ハードウェアの情報を取得しています</div></div></div><div class="host-strip-end"><span class="chip" id="host-state">CONNECTING</span><span class="small-text" id="host-uptime">—</span></div></section>
+          <div class="notice" id="target-notice" role="status" hidden></div>
+
+          <section class="resource-grid" aria-label="主要リソース">
+            <article class="resource-card" data-metric="cpu"><div class="card-top"><span class="metric-label">CPU</span><span class="metric-symbol">▧</span></div><div class="metric-big" id="cpu-value">—<span>%</span></div><div class="device-name" id="cpu-name">取得待ち</div><div class="sparkline" id="cpu-spark" aria-label="CPU使用率の推移"></div><div class="metric-bottom" id="cpu-detail">—</div></article>
+            <article class="resource-card" data-metric="gpu"><div class="card-top"><span class="metric-label">GPU</span><span class="metric-symbol">▥</span></div><div class="metric-big" id="gpu-value">—<span>%</span></div><div class="device-name" id="gpu-name">取得待ち</div><div class="sparkline" id="gpu-spark" aria-label="GPU使用率の推移"></div><div class="metric-bottom" id="gpu-detail">—</div></article>
+            <article class="resource-card" data-metric="ram"><div class="card-top"><span class="metric-label">RAM</span><span class="metric-symbol">▤</span></div><div class="metric-big" id="ram-value">—<span>%</span></div><div class="device-name" id="ram-size">取得待ち</div><div class="sparkline" id="ram-spark" aria-label="RAM使用率の推移"></div><div class="metric-bottom" id="ram-detail">—</div></article>
+            <article class="resource-card" data-metric="vram"><div class="card-top"><span class="metric-label">VRAM</span><span class="metric-symbol">▤</span></div><div class="metric-big" id="vram-value">—<span>%</span></div><div class="device-name" id="vram-size">取得待ち</div><div class="sparkline" id="vram-spark" aria-label="VRAM使用率の推移"></div><div class="metric-bottom" id="vram-detail">—</div></article>
+          </section>
+
+          <section class="main-grid">
+            <article class="panel performance-panel"><div class="panel-header"><div><div class="eyebrow">INFERENCE PERFORMANCE</div><h2>トークン速度</h2></div><select id="history-window" aria-label="グラフの表示期間"><option value="300">直近5分</option><option value="180">直近3分</option><option value="60">直近1分</option></select></div><div class="performance-numbers"><div><span class="small-text" id="speed-label">生成速度</span><div class="speed-value" id="decode-speed">—<span>tok/s</span></div><div class="speed-footnote" id="speed-detail">モデルへの接続を待っています</div></div><div class="prefill-summary"><span class="small-text">入力処理速度</span><strong id="prefill-speed">—</strong><span class="mono muted">tok/s</span></div></div><div class="chart-toolbar"><div class="segmented" role="group" aria-label="速度グラフの種類"><button class="active" data-chart="tok_s">生成</button><button data-chart="prefill_tok_s">入力処理</button></div><span class="chart-legend"><span></span><span id="chart-label">生成 tok/s</span></span></div><div class="main-chart" id="speed-chart" aria-label="トークン速度の推移"></div><div class="chart-times"><span id="chart-start">—</span><span id="chart-middle">—</span><span id="chart-end">現在</span></div><div class="performance-footer"><div><span>完了リクエスト</span><strong id="request-count">—</strong></div><div><span>累計出力トークン</span><strong id="output-total">—</strong></div><div><span>入力キャッシュ率</span><strong id="cache-hit">—</strong></div></div></article>
+
+            <article class="panel model-panel"><div class="panel-header"><div><div class="eyebrow">ACTIVE MODEL</div><h2>モデル情報</h2></div><span class="chip" id="model-state">未接続</span></div><select id="model-select" aria-label="表示する稼働モデル" hidden></select><h3 class="model-name" id="model-name">稼働モデルなし</h3><div class="model-tags" id="model-tags"></div><div class="context-block"><div><span>コンテキスト</span><strong id="context-limit">—</strong></div><div class="progress-track"><i id="context-progress"></i></div><div class="context-caption" id="context-caption">使用量はリクエスト処理中に表示します</div></div><dl class="model-details"><div><dt>エンジン</dt><dd id="model-engine">—</dd></div><div><dt>前回の生成速度</dt><dd id="last-speed">—</dd></div><div><dt>前回の入力処理</dt><dd id="last-prefill">—</dd></div><div><dt>生成中トークン</dt><dd id="generated-tokens">—</dd></div><div><dt>待機リクエスト</dt><dd id="queued-count">—</dd></div><div><dt>モデル稼働時間</dt><dd id="model-uptime">—</dd></div></dl><div class="model-endpoint"><span class="status-dot"></span><code id="model-endpoint">API 未接続</code></div><details class="model-storage"><summary>モデルの配置</summary><div id="model-paths"></div></details></article>
+          </section>
+
+          <section class="bottom-grid">
+            <article class="panel"><div class="panel-header"><div><div class="eyebrow">STORAGE</div><h2>ディスク使用量</h2></div><span class="metric-symbol">▰</span></div><div id="disk-list" class="disk-list"><div class="empty-state">容量情報を取得しています</div></div><div class="io-row"><div><span>読み込み</span><strong id="disk-read">—</strong></div><div><span>書き込み</span><strong id="disk-write">—</strong></div></div></article>
+            <article class="panel"><div class="panel-header"><div><div class="eyebrow">THERMAL & POWER</div><h2>温度・消費電力</h2></div><span class="metric-symbol">♧</span></div><div id="sensor-list" class="sensor-list"></div><div class="sensor-note">センサー非公開の環境では「—」を表示します。</div></article>
+            <article class="panel"><div class="panel-header"><div><div class="eyebrow">HOST ACTIVITY</div><h2>CPU・ネットワーク</h2></div><span class="metric-symbol">⌁</span></div><div class="core-caption" id="core-caption">CPUコアごとの使用率</div><div class="core-grid" id="core-grid"></div><div class="io-row"><div><span>受信 ↓</span><strong id="network-rx">—</strong></div><div><span>送信 ↑</span><strong id="network-tx">—</strong></div></div><div class="sensor-note" id="host-scope">—</div></article>
+          </section>
+          <section id="gpu-list" class="multi-gpu-grid" aria-label="GPUごとの使用状況" hidden></section>
+        </div>
+
+        <div id="models-view" hidden><div class="section-title"><h2>稼働中のモデル</h2><span class="small-text">すべての監視対象</span></div><div class="panel table-panel"><table><thead><tr><th>モデル / 接続先</th><th>ホスト</th><th>状態</th><th>生成 tok/s</th><th>Context</th></tr></thead><tbody id="running-models"></tbody></table></div><div class="section-title catalog-title"><h2>登録済みモデル</h2><span class="small-text">ローカルの model.toml</span></div><div class="catalog-grid" id="model-catalog"></div></div>
+        <div id="connections-view" hidden><div class="section-title"><h2>監視対象</h2><button class="secondary-button" id="add-connection-main">＋ API接続を追加</button></div><div class="connections-grid" id="connection-cards"></div><div class="connection-help panel"><h2>Colabへの接続</h2><p>いつもの起動コマンドで開いたSSH接続を自動的に見つけます。runtimeの起動・停止はターミナルから行えます。</p><div class="command-pair"><code>./colab-qwen codex</code><code>./colab-glm codex</code></div><p class="muted">監視を終了しても、モデルやColab runtimeは停止しません。</p></div></div>
+
+        <footer class="page-footer"><span><span class="status-dot"></span> <span id="footer-status">接続を確認中</span></span><span>LLM OBSERVATORY <span class="footer-divider">/</span> LOCAL + COLAB</span></footer>
+      </div>
+    </main>
+  </div>
+  <dialog id="connection-dialog"><form id="connection-form"><div class="dialog-heading"><div><div class="eyebrow">NEW CONNECTION</div><h2>ローカルAPI接続を追加</h2></div><button type="button" id="close-dialog" class="icon-button" aria-label="閉じる">×</button></div><p>別ポートで動いている推論サーバーを監視対象に追加します。ハードウェア情報は現在のローカルマシンのものです。</p><label>接続名<input name="name" required maxlength="60" placeholder="例：Bonsai / llama.cpp" autocomplete="off"></label><label>推論APIのURL<input name="api_url" required type="url" value="http://127.0.0.1:5071" placeholder="http://127.0.0.1:5071" autocomplete="off"></label><div id="form-error" class="form-error" role="alert"></div><div class="dialog-actions"><button type="button" id="cancel-dialog" class="secondary-button">キャンセル</button><button class="primary-button" id="save-connection" type="submit">接続を追加</button></div></form></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

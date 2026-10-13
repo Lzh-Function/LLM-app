@@ -62,6 +62,7 @@ id_rsa
 id_ed25519
 /codex/colab-qwen/.runtime/
 /codex/colab-glm/.runtime/
+/resource-dashboard/.runtime/
 
 # Python tooling
 .venv/

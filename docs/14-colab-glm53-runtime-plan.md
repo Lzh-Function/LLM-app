@@ -186,7 +186,7 @@ MyDrive/GLM53-data/
 `models/Maya-L/` はMaya自身の配置（`--models-dir` の下にモデル名のフォルダ）で、**packはGGUFと同じフォルダに `pack/` として生成される**。Qwenのような `packs/` フォルダは作らない。packは全テンソルのインデックスと小さなfloat重み・tokenizer（合計1〜2GB）で、expertはGGUFに残る。Mayaは `pack/native_experts.txt` が同じGGUFを指し、`PACK_FILES` が揃っていれば作り直さない。
 `<sig>` はエンジン種別・固定commit・nvccのパスとバージョン・libc・CPU flagsのSHA-256先頭20桁。これらの条件が変わると再ビルドになる。Maya側は `build/strata` と `MAYA-BUILD.json` をそのまま復元し、Maya自身のstamp検査（source hashとarchs）を通す。
 llama.cppは `cmake -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=80` で `llama-server` だけを作り、Mayaは `maya.py --yes --no-start` でセットアップした後に `--config` で起動する2段構えにする（`--no-start` だけだとdashboard起動を飛ばせないため）。
-Qwenのruntimeと同じく、保存先はDrive内のみ（SSDフォールバックなし）、ポート競合はビルド・ダウンロード前に失敗、失敗時はruntime stopまで行う、を維持する。
+永続保存先はDrive内のみ、ポート競合はビルド・ダウンロード前に失敗、失敗時はruntime stopまで行う、を維持する。2026-10-13の変更で、`start` / `codex` の推論用には選択したGGUF（Mayaはpackも）をruntime SSDへコピーするようにした。容量・I/Oの問題でコピーできない場合だけDriveの重みを直接読む。`prepare` はDriveへの保存だけを行う。詳細は [colab-glm README](../codex/colab-glm/README.md#推論時のruntime-ssdコピー)。
 `prepare` はサーバーを起動せず、`--variant` を省略すると3変種分（GGUFで約420GiB）の取得と2エンジンのビルド・Mayaのpack生成を1runtimeでDriveへキャッシュする。
 待機上限は `prepare` だけ480分、runtime 10時間、GDrive同期待ち30分の既定値。contextは各変種の既定値を使い、`--context` は単一変種の指定時に限る。
 

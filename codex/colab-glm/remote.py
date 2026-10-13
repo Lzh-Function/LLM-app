@@ -1,4 +1,4 @@
-"""Colab bootstrap: GLM-5.3 weights and built engines on Drive, build and serve in /content."""
+"""Colab bootstrap: persistent GLM-5.3 weights on Drive, SSD-first inference."""
 from __future__ import annotations
 
 import argparse
@@ -20,6 +20,38 @@ from pathlib import Path
 WORK = Path('/content/glm53-a100')
 DRIVE = Path('/content/drive')
 MIN_RAM_KIB = 150 * 1024 * 1024
+SSD_RESERVE = 5_000_000_000
+MAYA_PACK_FILES = ('index.txt', 'native_experts.txt', 'dense.bin', 'tokenizer/vocab.json',
+                   'tokenizer/merges.txt', 'tokenizer/token_type.json', 'tokenizer/chat_template.jinja')
+
+
+class ModelCopyIntegrityError(RuntimeError):
+    """The verified Drive source changed or failed SHA-256 during SSD staging."""
+
+
+class InsufficientRuntimeSpace(RuntimeError):
+    """The runtime SSD cannot hold the model and a small operating reserve."""
+
+
+def privacy_launcher():
+    uploaded = Path(__file__).with_name('colab_privacy.py')
+    return uploaded if uploaded.is_file() else Path(__file__).resolve().parents[1] / 'colab_privacy.py'
+
+
+def check_privacy():
+    command = [sys.executable, str(privacy_launcher()), '--check']
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.returncode:
+        lines = result.stdout.splitlines()
+        reason = next((line for line in reversed(lines) if line.startswith('Colab privacy guard refused startup:')),
+                      '\n'.join(lines[-12:]))
+        raise RuntimeError(f'Privacy preflight failed: {reason}')
+    print(result.stdout, end='', flush=True)
+
+
+def serve_private(argv, cwd):
+    command = [sys.executable, str(privacy_launcher()), '--cwd', str(cwd), '--', *map(str, argv)]
+    os.execv(command[0], command)
 
 
 def run(*args, **kwargs):
@@ -58,7 +90,7 @@ def ensure_drive(data):
         raise RuntimeError('GDrive is not mounted. Run colab drivemount -s glm53-a100 in your terminal.')
     data = data.resolve()
     if not data.is_relative_to((DRIVE / 'MyDrive').resolve()):
-        raise RuntimeError('Model destination must be inside /content/drive/MyDrive; SSD fallback is disabled.')
+        raise RuntimeError('Persistent model destination must be inside /content/drive/MyDrive.')
     data.mkdir(parents=True, exist_ok=True)
     probe = data / '.write-test'
     probe.write_text('ok')
@@ -142,11 +174,12 @@ def check_drive_space(data, profile):
                                'download not started.')
 
 
-def fetch_variant(profile, data, reverify):
+def fetch_variant(profile, data, reverify, *, skip_cache_mtime=True):
     """Every pinned file of one variant, resumed and SHA-256 verified before publishing."""
     for item in profile['files']:
         url = f'https://huggingface.co/{item["repo"]}/resolve/{item["revision"]}/{item["source"]}'
-        fetch_verified(url, data / item['destination'], item['size'], item['sha256'], reverify=reverify)
+        fetch_verified(url, data / item['destination'], item['size'], item['sha256'],
+                       reverify=reverify, skip_cache_mtime=skip_cache_mtime)
 
 
 def prepare_variants(manifest, requested):
@@ -157,12 +190,13 @@ def prepare_variants(manifest, requested):
     return [requested]
 
 
-def prepare_variant(manifest, variant, profile, data, context, nvcc, cuda_version, reverify):
+def prepare_variant(manifest, variant, profile, data, context, nvcc, cuda_version, reverify, *,
+                    skip_cache_mtime=True):
     """Weights plus the compiled engine (Maya's pack included) on Drive; the server is never started."""
     check_drive_space(data, profile)
     signature = engine_signature(manifest, profile, nvcc, cuda_version)
     print(f'Preparing {variant} ({profile["model"]}), engine {profile["engine"]}, context {context}', flush=True)
-    fetch_variant(profile, data, reverify)
+    fetch_variant(profile, data, reverify, skip_cache_mtime=skip_cache_mtime)
     if profile['engine'] == 'maya':
         # Maya's setup writes the pack next to the GGUF files and caches the engine under the same signature.
         maya_setup(manifest, profile, data, context, manifest['server_port'], signature)
@@ -171,7 +205,7 @@ def prepare_variant(manifest, variant, profile, data, context, nvcc, cuda_versio
     print(f'Prepared {variant}: weights and engine cached on Drive', flush=True)
 
 
-def fetch_verified(url, path, size, sha256, *, reverify=False):
+def fetch_verified(url, path, size, sha256, *, reverify=False, skip_cache_mtime=True):
     """Resume in destination directory, validate range and hash before publishing."""
     path.parent.mkdir(parents=True, exist_ok=True)
     marker = path.with_name(path.name + '.verified.json')
@@ -180,8 +214,15 @@ def fetch_verified(url, path, size, sha256, *, reverify=False):
         expected = {'sha256': sha256, 'size': size, 'mtime_ns': stat.st_mtime_ns}
         if not reverify and stat.st_size == size and marker.is_file():
             try:
-                if json.loads(marker.read_text()) == expected:
-                    print('Verified cache:', path.name, flush=True)
+                record = json.loads(marker.read_text())
+                if skip_cache_mtime:
+                    matches = (isinstance(record, dict) and record.get('sha256') == sha256
+                               and record.get('size') == size)
+                else:
+                    matches = record == expected
+                if matches:
+                    label = 'Verified cache (mtime check skipped):' if skip_cache_mtime else 'Verified cache:'
+                    print(label, path.name, flush=True)
                     return
             except ValueError:
                 pass
@@ -232,6 +273,120 @@ def fetch_verified(url, path, size, sha256, *, reverify=False):
         partial.replace(path)
     atomic_json(marker, {'sha256': sha256, 'size': size, 'mtime_ns': path.stat().st_mtime_ns})
     print('Downloaded and SHA-256 verified (Drive cloud sync is separate):', path.name, flush=True)
+
+
+def maya_pack_path(config):
+    settings = json.loads(config.read_text())
+    args = settings.get('args') or []
+    if args.count('--glm-pack') != 1 or args.index('--glm-pack') == len(args) - 1:
+        raise RuntimeError('Maya config has no unique --glm-pack path.')
+    return Path(args[args.index('--glm-pack') + 1])
+
+
+def model_copy_sources(data, profile, pack=None):
+    """Return only the selected shards and Maya's required pack files."""
+    sources = []
+    for item in profile['files']:
+        relative = Path(item['destination'])
+        sources.append((relative, item['size'], item['sha256']))
+    if pack is not None:
+        try:
+            relative_pack = pack.relative_to(data)
+        except ValueError as exc:
+            raise RuntimeError(f'Maya pack is outside the persistent model directory: {pack}') from exc
+        for name in MAYA_PACK_FILES:
+            relative = relative_pack / name
+            path = data / relative
+            if not path.is_file() or path.is_symlink() or path.parent.is_symlink():
+                raise RuntimeError(f'Maya pack is missing or linked: {path}')
+            sources.append((relative, path.stat().st_size, None))
+    for relative, size, _ in sources:
+        path = data / relative
+        if not path.is_file() or path.is_symlink() or path.stat().st_size != size:
+            raise ModelCopyIntegrityError(f'Verified model source is missing or changed: {path}')
+    return sources
+
+
+def copy_model_file(source, destination, size, sha256=None):
+    """Copy one Drive file to an unpublished SSD path, checking the GGUF hash in flight."""
+    free = shutil.disk_usage(WORK).free
+    if free < SSD_RESERVE:
+        raise InsufficientRuntimeSpace(f'{source.name}: only {free / 1e9:.2f} GB free')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_name(destination.name + '.part')
+    checksum = hashlib.sha256() if sha256 else None
+    copied = 0
+    started = last_report = time.monotonic()
+    print(f'Copy to runtime SSD: {source.name}: 0.00/{size / 1e9:.2f} GB', flush=True)
+    try:
+        with source.open('rb') as incoming, partial.open('wb') as outgoing:
+            while block := incoming.read(8 * 1024 * 1024):
+                copied += len(block)
+                if copied > size:
+                    raise ModelCopyIntegrityError(f'Model source grew during SSD copy: {source}')
+                outgoing.write(block)
+                if checksum:
+                    checksum.update(block)
+                if shutil.disk_usage(WORK).free < SSD_RESERVE:
+                    raise InsufficientRuntimeSpace(f'{source.name}: runtime SSD reserve reached during copy')
+                now = time.monotonic()
+                if now - last_report >= 20:
+                    elapsed = max(0.001, now - started)
+                    print(f'Copy to runtime SSD: {source.name}: {copied / 1e9:.2f}/{size / 1e9:.2f} GB '
+                          f'({copied / elapsed / 1e6:.1f} MB/s)', flush=True)
+                    last_report = now
+        if copied != size or (checksum and checksum.hexdigest() != sha256):
+            raise ModelCopyIntegrityError(f'Model source changed or failed SHA-256 during SSD copy: {source}')
+        partial.replace(destination)
+    finally:
+        partial.unlink(missing_ok=True)
+    elapsed = max(0.001, time.monotonic() - started)
+    print(f'Copied to runtime SSD: {source.name}: {copied / 1e9:.2f} GB in {elapsed:.1f} s', flush=True)
+
+
+def stage_model_on_ssd(data, profile, pack=None):
+    """Use a complete SSD copy, or return Drive when capacity or copying fails."""
+    sources = model_copy_sources(data, profile, pack)
+    runtime_data = WORK / 'model-data'
+    if runtime_data.is_symlink():
+        raise RuntimeError(f'Runtime model directory is linked: {runtime_data}')
+    required = sum(size for _, size, _ in sources) + SSD_RESERVE
+    try:
+        if runtime_data.exists():
+            shutil.rmtree(runtime_data)
+        free = shutil.disk_usage(WORK).free
+        print(f'Runtime SSD free: {free / 1e9:.2f} GB; selected model, pack and reserve: '
+              f'{required / 1e9:.2f} GB (DriveFS cache may release space during the copy)', flush=True)
+        runtime_data.mkdir()
+        for relative, size, sha256 in sources:
+            copy_model_file(data / relative, runtime_data / relative, size, sha256)
+    except (OSError, InsufficientRuntimeSpace) as exc:
+        print(f'Runtime SSD copy failed ({type(exc).__name__}); using Google Drive model files.', flush=True)
+        try:
+            if runtime_data.exists():
+                shutil.rmtree(runtime_data)
+        except OSError as cleanup:
+            print(f'Incomplete SSD copy cleanup failed ({type(cleanup).__name__}); '
+                  'Drive startup may need more disk space.', flush=True)
+        return data
+    except BaseException:
+        shutil.rmtree(runtime_data, ignore_errors=True)
+        raise
+    print('Runtime SSD model copy complete; inference will read the SSD.', flush=True)
+    return runtime_data
+
+
+def repoint_maya_config(config, data, runtime_data):
+    """Switch Maya's model-relative pack and tokenizer only after staging completed."""
+    settings = json.loads(config.read_text())
+    pack = maya_pack_path(config)
+    relative = pack.relative_to(data)
+    args = settings['args']
+    args[args.index('--glm-pack') + 1] = str(runtime_data / relative)
+    settings['tokenizer'] = str(runtime_data / relative / 'tokenizer')
+    if isinstance(settings.get('installer'), dict):
+        settings['installer']['models_dir'] = str(runtime_data / 'models')
+    atomic_json(config, settings)
 
 
 def source_tree(repo, commit, destination):
@@ -324,8 +479,8 @@ def maya_config_path(source):
 def maya_setup(manifest, profile, data, context, port, signature):
     """Set Maya up against the Drive model folder, then hand back the config to start.
 
-    Two runs on purpose: --no-start only tunes (no dashboard screen), and the second run starts the
-    server from the config, which is what Maya's own run script does.
+    --no-start performs the build and tuning. Serving uses the prepared config
+    directly, avoiding Maya's startup touches, rebuilds and update/restart hooks.
     """
     source = WORK / 'project-maya'
     source_tree('mw00/project-maya', manifest['maya_commit'], source)
@@ -361,6 +516,8 @@ def maya_setup(manifest, profile, data, context, port, signature):
     settings = json.loads(config.read_text())
     # Maya reports its own MODEL_NAME for every build; the Codex catalog and the health probe use ours.
     settings['model_name'] = profile['model']
+    settings.update(log='/dev/null', api_monitor=False, open_browser=False)
+    settings.pop('slot_save_path', None)
     atomic_json(config, settings)
     return python, source, config
 
@@ -387,6 +544,8 @@ def main():
     parser.add_argument('--context', type=int)
     parser.add_argument('--variant')
     parser.add_argument('--reverify', action='store_true')
+    parser.add_argument('--skip-cache-mtime', action=argparse.BooleanOptionalAction, default=True,
+                        help='Ignore modification time of size/SHA-256 verified cache (default); --reverify wins')
     parser.add_argument('--prepare', action='store_true',
                         help='Fetch weights and build the engines for the selected variant(s), then exit without serving')
     args = parser.parse_args()
@@ -396,6 +555,8 @@ def main():
     names = prepare_variants(manifest, args.variant) if args.prepare else [select_variant(manifest, args.variant)[0]]
     port = manifest['server_port']
     check_server_port(port)  # Fail before building or downloading.
+    if not args.prepare:
+        check_privacy()
     print('Model variants: ' + ', '.join(names), flush=True)
     check_accelerator()
     check_ram()
@@ -408,7 +569,7 @@ def main():
         for name in names:
             profile = manifest['variants'][name]
             prepare_variant(manifest, name, profile, data, select_context(profile, args.context),
-                            nvcc, cuda_version, args.reverify)
+                            nvcc, cuda_version, args.reverify, skip_cache_mtime=args.skip_cache_mtime)
         print('GLM_PREPARE_COMPLETE ' + json.dumps(names), flush=True)
         return
     variant = names[0]
@@ -416,20 +577,37 @@ def main():
     context = select_context(profile, args.context)
     check_drive_space(data, profile)
     print(f'Model variant: {variant} ({profile["model"]}), engine {profile["engine"]}, context {context}', flush=True)
-    fetch_variant(profile, data, args.reverify)
+    fetch_variant(profile, data, args.reverify, skip_cache_mtime=args.skip_cache_mtime)
     signature = engine_signature(manifest, profile, nvcc, cuda_version)
     if profile['engine'] == 'maya':
         python, source, config = maya_setup(manifest, profile, data, context, port, signature)
-        argv = [str(python), str(source / 'maya.py'), '--config', str(config),
+        runtime_data = stage_model_on_ssd(data, profile, maya_pack_path(config))
+        if runtime_data != data:
+            try:
+                repoint_maya_config(config, data, runtime_data)
+            except OSError as exc:
+                print(f'Runtime SSD Maya config update failed ({type(exc).__name__}); '
+                      'using Google Drive model files.', flush=True)
+                try:
+                    shutil.rmtree(runtime_data)
+                except OSError as cleanup:
+                    print(f'Incomplete SSD copy cleanup failed ({type(cleanup).__name__}); '
+                          'Drive startup may need more disk space.', flush=True)
+                runtime_data = data
+        argv = [str(python), str(source / 'serve/server.py'), '--engine', 'strata', '--config', str(config),
                 '--port', str(port), '--host', '127.0.0.1']
-        print(f'Starting Maya {variant}, localhost:{port}, context {context}', flush=True)
-        os.chdir(source)
-        os.execv(argv[0], argv)
+        print(f'Starting Maya {variant} from {"runtime SSD" if runtime_data != data else "Google Drive"}, '
+              f'localhost:{port}, context {context}', flush=True)
+        serve_private(argv, source)
+        return
     binary = llama_server(manifest, data, signature, nvcc)
-    argv = [str(binary), '-m', str(data / profile['llama']['first_shard']), '-c', context,
-            '--host', '127.0.0.1', '--port', port, '--alias', profile['model'], *profile['llama']['args']]
-    print(f'Starting llama.cpp {variant}, localhost:{port}, context {context}', flush=True)
-    os.execv(argv[0], argv)
+    runtime_data = stage_model_on_ssd(data, profile)
+    argv = [str(binary), '-m', str(runtime_data / profile['llama']['first_shard']), '-c', context,
+            '--host', '127.0.0.1', '--port', port, '--alias', profile['model'], *profile['llama']['args'],
+            '--log-disable', '--metrics']
+    print(f'Starting llama.cpp {variant} from {"runtime SSD" if runtime_data != data else "Google Drive"}, '
+          f'localhost:{port}, context {context}', flush=True)
+    serve_private(argv, WORK / 'llama.cpp')
 
 
 if __name__ == '__main__':

@@ -42,11 +42,11 @@ cd /workspace/LLM
 ./colab-glm codex
 ```
 
-この1コマンドが runtime作成→GDriveマウント・認証→GGUF取得・SHA-256検証→ソース取得・**エンジンビルド（sm_80）**→（Mayaは）pack生成→サーバー起動→Codex起動を行う。
+この1コマンドが runtime作成→GDriveマウント・認証→GGUF取得・SHA-256検証→ソース取得・**エンジンビルド（sm_80）**→（Mayaは）pack生成→runtime SSDへのコピーを試行→サーバー起動→Codex起動を行う。
 `flash` の初回は Maya のエンジンコンパイルと pack 生成（全テンソルのインデックスと小さなfloat重み・tokenizerで1〜2GB。expertはGGUFに残る）が加わり、`flash-uncensored`／`full` は llama-server のビルドになる。
 初回準備の待機上限は既定240分、runtime全体の上限は6時間。必要なら `--startup-minutes 300 --max-hours 8` で変える。
 **Codexを終了するとSSH接続とモデルを終了し、GDriveの同期完了を待ってから `colab stop -s glm53-a100` を実行する。**
-同期待ちは既定で最大10分。初回の約150GBの書き込みに長めの時間を確保するなら `--flush-minutes 30`。
+同期待ちはColabの `flush_and_unmount()` と同じ最大24時間（`--flush-minutes` で変更可）。同期が終われば直ちに停止する。上限やエラーで同期を確認できなければruntimeを残す。同期待ち中はA100の利用時間を消費する。
 
 ## 2回目以降はDriveのキャッシュを使う
 
@@ -62,12 +62,33 @@ MyDrive/GLM53-data/
     └── maya-<sig>/{strata, MAYA-BUILD.json}
 ```
 
-- GGUFはサイズ・更新時刻・`.verified.json` が一致すれば再取得も全量ハッシュも省く。再検証は `--reverify`。
-- Driveの初回同期で更新時刻が変わる場合は、次回にSHA-256を全量再確認する。ダウンロードはし直さず、検証後に記録を更新する。検証開始・20秒ごとの読取GBと速度・完了を表示する。
+- GGUFはサイズ・`.verified.json` が一致すれば再取得も全量ハッシュも省く。更新日時の比較は既定で省略する。再検証は `--reverify`。
+- 検証記録の不一致や `--reverify` で再検証するときは、ダウンロードはし直さず、検証後に記録を更新する。検証開始・20秒ごとの読取GBと速度・完了を表示する。
+
+`--skip-cache-mtime` は既定で有効。Drive同期後の更新日時の差を無視して検証済みキャッシュを使うため、指定は不要。
+本体のサイズと `.verified.json` のサイズ・SHA-256がmanifestと一致すれば、更新日時を比較せず全量ハッシュを省く。ログは `Verified cache (mtime check skipped)`。
+初回ダウンロードは従来どおりSHA-256を検証する。検証記録が無い・壊れている・記録のSHA-256/サイズが異なる場合は全量検証し、本体のサイズが異なる場合は拒否する。
+`--reverify` を指定すれば全量検証を優先する。既定では同じサイズの内容変更は検出しないため、内容を検査するときは `--reverify` を使う。従来の更新日時比較を使う場合は `--no-skip-cache-mtime` を付ける。
+
+```bash
+./colab-glm codex
+./colab-glm start
+./colab-glm prepare
+./colab-glm start --reverify # 全量SHA検証
+```
+
 - `--repack` は無い。Mayaは `models/Maya-L/pack/native_experts.txt` が同じGGUFを指し、`index.txt`・`dense.bin`・tokenizerが揃っていればpackを作り直さない。
 - `<sig>` は「エンジン種別 + 固定commit + nvccのパスとバージョン + libc + CPU flags」のSHA-256先頭20桁。これらの条件が変わると再ビルドになる。
 - 復元した Maya の `build/strata` と `MAYA-BUILD.json` は、Maya自身のstamp検査を通るため、一致すればコンパイルを飛ばす。
 - ソース（llama.cpp、project-maya、Mayaが使うllama.cpp）と `.venv` はColabの一時ディスクに置く。runtimeごとに作り直す。
+
+## 推論時のruntime SSDコピー
+
+`start` / `codex` は選択した変種のGGUFをDriveから `/content/glm53-a100/model-data/` へコピーし、Mayaの場合は同じモデルフォルダのpackもコピーする。コピー中にGGUFのSHA-256を照合し、全ファイルが揃ったときだけSSDのパスでエンジンを起動する。`prepare` はDriveへの永続保存とエンジン準備だけを行い、SSDコピーはしない。
+
+DriveFSの読取キャッシュは同じruntime SSDを使うが、容量の使い方は起動ごとに変わる。そのため事前の空き容量だけでコピーを諦めず、5GBの空きを残しながら実際にコピーを試す。容量不足やコピー中のI/Oエラーでは途中のSSDコピーを削除し、検証済みDriveファイルを直接読む設定で起動する。Drive側ファイルのサイズ変更やコピー中のSHA-256不一致は破損の可能性があるため、Drive読込へ切り替えず起動を停止する。
+
+ログの `Runtime SSD model copy complete` はSSD読込、`using Google Drive model files` はDrive読込を表す。SSDコピーはruntime停止時に消えるため、次回起動でも再度コピーを試す。Drive上のモデルとエンジンキャッシュは引き続き永続化する。
 
 ## 準備だけまとめて行う
 
@@ -78,7 +99,7 @@ MyDrive/GLM53-data/
 
 サーバーもCodexも起動しない。runtime作成→GDriveマウント→変種ごとの空き容量確認→GGUF取得・SHA-256検証→エンジンビルド→（`flash` は）pack生成までを1runtimeで済ませ、完了後にGDriveを同期して停止する。
 contextは各変種の既定値（`flash`／`flash-uncensored` は131072、`full` は65536）を使い、`--context` は `--variant` を1つに絞った時だけ受け付ける。
-待機上限は既定480分、runtime全体は10時間、GDrive同期待ちは30分（`prepare` 専用の既定値。`--startup-minutes`・`--max-hours`・`--flush-minutes` で変更可）。
+待機上限は既定480分、runtime全体は10時間、GDrive同期待ちは最大24時間（`--startup-minutes`・`--max-hours`・`--flush-minutes` で変更可）。
 完了は `bootstrap.log` の `GLM_PREPARE_COMPLETE ["flash", "flash-uncensored", "full"]` で分かる。以後の `start`／`codex` はキャッシュを使うだけになり、初回の待ち時間がサーバーを待つ時間から消える。
 準備プロセスはこの完了行を出して正常終了する。完了行がある正常終了を `GLM_BOOTSTRAP_FAILED` と表示しない。クラウドへの保存確認は、その後の「GDriveの同期完了を確認しました。」まで待つ。
 
@@ -116,7 +137,7 @@ colab stop -s glm53-a100
 `/v1/responses` はMaya・llama.cppの両方が本体で提供する。変換層は置いていない。
 `start`のターミナルでCtrl+Cを押しても、GDrive同期待ちを経てruntimeをstopする。
 `client`の終了だけでは共有runtimeを止めないため、最後に `stop` する。`codex`モードではCodex終了時に自動でstopする。
-起動失敗、SSH切断、SIGTERM/SIGHUP、時間上限でも、マウント済みなら同期を試みてから停止する。
+起動失敗、SSH切断、SIGTERM/SIGHUP、時間上限でも、マウント済みなら同期を確認してから停止する。同期に失敗した場合は未同期データを保護するためruntimeを残し、`stop` で再試行できる。
 既存の `glm53-a100` があると新規起動は拒否する。
 
 ```bash
@@ -128,6 +149,15 @@ colab stop -s glm53-a100
 ./colab-glm start --max-hours 2       # 初回準備を含む2時間の上限。
 ./colab-glm codex --context 32768 --max-hours 3
 ```
+
+
+同期待ちの失敗でruntimeが残った場合は `./colab-glm stop` で再試行する。
+DriveFSが完了前にマウントを外して終了した場合も、既存の認証・キャッシュで再マウントして同期を再試行する。マウントが外れただけでは同期済みと判定しない。
+同期確認を省いて解放する必要がある場合だけ `./colab-glm stop --force` を使う（未同期データを失う可能性がある）。
+
+Drive認証後のruntime再接続・作業ディレクトリ準備は、1回最大120秒、ローカルCLIのタイムアウト時に最大3回まで接続を作り直して再試行する。
+ここでColab CLI自身の接続初期化が詰まる場合もある。再試行は再実行しても結果が変わらない準備セルに限定し、モデル起動やDrive同期のセルは自動で再実行しない。
+セル実行の失敗段階・待機上限・試行回数・エラー種別はローカルの `.runtime/setup-error.json` に保存する。認証情報や推論出力はこのJSONに含めない。
 
 ## 設定と保存先
 
@@ -141,13 +171,54 @@ colab stop -s glm53-a100
 - 変種ごとの `model` 名・エンジン・context選択肢・ファイル一覧は `manifest.json` の `variants` に置き、`default_variant` が既定になる。
 - [公式Codex provider設定](https://learn.chatgpt.com/docs/config-file/config-reference)に従いResponses APIを使用。専用モデルカタログとCLIオーバーライドを使い、通常のCodex設定は書き換えない。
 - ローカル: `codex/colab-glm/.runtime/` にSSH鍵、接続ログ、専用カタログ、`drive-sync-status.json`。git対象外、権限700。
-- Colab内: `/content/glm53-a100/bootstrap.log` にビルド・取得・サーバーのログ。準備失敗時は末尾をローカルの `.runtime/bootstrap-error.log` に保存する。
+- Colab内: `/content/glm53-a100/bootstrap.log` にビルド・取得・保護ランチャーの起動結果だけを保存する。推論中の標準出力・標準エラーはRAMに保存する。準備・起動失敗時はRAMのエンジン診断もローカルの `.runtime/bootstrap-error.log` に回収する。
 
-保存先を変える場合は `--data-dir /content/drive/MyDrive/任意のフォルダ`。MyDriveの外や未マウントのディレクトリは拒否し、一時SSDへのモデル保存に切り替えない。
+永続保存先を変える場合は `--data-dir /content/drive/MyDrive/任意のフォルダ`。MyDriveの外や未マウントのディレクトリは拒否する。推論用の一時コピー先は常にruntime SSDの `/content/glm53-a100/model-data/`。
+
+## 会話内容をColabのディスクへ保存しないための制限
+
+全3変種の `start` / `codex` は共通の `../colab_privacy.py` をruntimeへアップロードし、モデル準備前に保護機能を確認する。
+GPU runtimeでは保護下でCUDAの初期化も事前検査し、重み取得前にGPUとの互換性を確認する。
+モデル取得・pack生成・エンジンビルドは従来どおりディスクへ保存する。`prepare` は会話サーバーを起動しないため、書き込み制限の対象外。
+推論は **Landlock ABI 3以上の書き込み制限**の中で実行し、子プロセスにも制限を継承する。
+Landlockが使えないkernelでは、Colab内に必要に応じて `bubblewrap` を導入し、推論専用の読み取り専用マウント名前空間へ切り替える。
+この方式もモデル準備前に実際の書き込み拒否を検査する。必要なNVIDIAノードだけを持つ `/dev` を使い、SSH/APIのためネットワークは共有する。
+Colabは新しい `/proc` のマウントも拒否するため、元の `/proc` を使う。CUDAが更新する自分の `/proc/<PID>/task/<TID>/comm`（RAM上のスレッド名）だけを追加で許可する。ディスクへ通じるmagic linkなどはネイティブの書き込み制限で拒否する。CUDAとpsutilのPID参照を保つため、PID名前空間と起動元のプロセスグループは維持する。
+`/content`、GDrive、通常の `/tmp`、ホームなどへのファイル作成・追記・切り詰め・移動・削除を拒否する。
+書き込み先はtmpfsと確認した `/dev/shm`、`/dev/null` / `/dev/zero` / NVIDIAのデバイスと、上記のprocメタデータに限定する。
+bubblewrapでは `/tmp` と `/dev` もRAM上に作り、通常のディスクとGDriveのマウントが読み取り専用であることを内側のランチャーで確認する。
+SSD/GDriveからのモデル重みの読み出し・読み取り専用mmapと、RAM/VRAM間のexpertキャッシュは維持する。
+モデル重みのruntime SSDコピーも会話受付前の準備段階で作成する。推論中にモデルフォルダへの書き込みを広く許可する例外は設けない。
+
+Mayaは `--no-start` で準備を済ませた設定から `serve/server.py` を直接起動する。起動時の再ビルド・設定touch・更新再起動を介さない。
+MayaのエンジンログはRAMの `/dev/shm/colab-privacy-*/inference.log`、APIモニターとslot保存は無効。llama.cppも `--log-disable` を付ける。
+全変種で標準出力・標準エラーをRAMへ保存し、継承したディスクのログFDを閉じ、デバッグ・トレース・dump設定を取り除く。起動失敗時はSSHでRAMの診断をローカルの `.runtime/bootstrap-error.log` に回収する。
+Pythonのbytecode保存とCUDAのディスクキャッシュを止め、一時ファイルとXDGキャッシュは `/dev/shm/colab-privacy-*` に置く。
+このRAM上の一時領域には会話内容が入り得る。OSのswapは無効化して確認し、RAMがディスクへ退避されないようにする（モデル重みのSSDオフロードとは別）。
+core dumpのhard limitを0にする。Colabのパイプ式core handlerは管理側の読み取り専用設定なので変更しない。
+代わりに、事前に `cc` でビルドした固定コードの `privacy-core-*.so` をPythonと子エンジンに継承し、各execの直後に `PR_SET_DUMPABLE=0` を設定する。
+ライブラリは会話を含まないコード成果物としてColabのbootstrapフォルダへ保存する。実際のexecで適用を事前検査し、動的ELF64ではないエンジンや適用できないruntimeでは起動を拒否する。
+推論中は `open` / `openat` / `fopen` / `truncate` と64bit版でも、RAM・許可したデバイス以外への書き込みを拒否する。元の `/proc` のmagic link経由のディスク書き込みも通常のファイルAPIでは拒否する。
+この追加ライブラリは信頼する推論エンジンのログ・ダンプ抑制用であり、任意の未信頼コードが直接syscallを呼ぶ場合までの完全な隔離を保証するものではない。
+Linux capabilitiesを落とし、対応kernelではLandlockの拒否ログも抑制する。
+
+保護を適用できないruntimeでは、制限を弱めて起動せず失敗して終了処理へ進む。
+`bootstrap.log` に `COLAB_PRIVACY_ENFORCED` が出てからAPIが利用可能になる。推論の診断ログはRAMにあり、起動失敗時にローカルへ回収できる。
+変更は次回の `start` / `codex` から適用する。既存サーバーへ `client` で接続するだけでは適用されず、過去のログも自動削除しない。
+Googleの管理基盤や独立した別プロセスまで含めた保存ゼロの保証ではない。
+
+ローカルの検証は `python3 codex/test_colab_privacy.py`。実kernelでの書き込み拒否、子プロセスへの継承、ログFDの閉鎖とモデルの読み取り専用mmapを検証する。
+モデル全体の保護付きAPI推論は未検証。2026-10-13のQwen A100では、保護下のCUDA初期化、PCIe計測、322MiBのembeddingのRAM固定とnative packの読込まで確認した（3分の起動試験ではAPI準備完了に到達せず終了）。GLMモデル本体でのGPU推論は未検証。
+2026-10-13のQwenのColab A100起動では、Landlock syscallが `Function not implemented` を返して停止したため、GLMにも共通の読み取り専用マウント方式を追加した。
+同日のColab CPU runtime（kernel `6.6.122+`）では最終版の `COLAB_PRIVACY_PREFLIGHT_OK` と `COLAB_PRIVACY_LIVE_CHECK_OK` を確認済み。
+モデル相当ファイルの読み取り専用mmap、ディスクへの作成・上書きの拒否、RAM一時ファイルの読み書き、継承したディスクログFDの閉鎖、子exec後のcapabilitiesゼロを確認し、検証runtimeを停止した。GDriveとGPUモデル本体はこの検証で使っていない。
+固定revisionのMayaを使うローカルCPUモックでは、実Landlock・capabilities制限・ログFD閉鎖を適用してChat Completions APIの往復を確認した。
+ローカル環境はswap有効かつ `/dev/shm` が読み取り専用のため、このモック確認だけはホストの事前検査と一時領域を差し替えた。本番ランチャーに迂回オプションはない。
+この確認で、固定revisionのMayaサーバーは `/v1/responses` に404を返す既存の互換性問題も判明した。今回の保存抑制とは別に、MayaへCodexを接続するにはResponses変換などの対応が必要。
 
 ## 実装の確認状況
 
-`python3 codex/colab-glm/test_framework.py` で69件が通過。
+`python3 codex/colab-glm/test_framework.py` で94件が通過。
 再開ダウンロード、SHA-256不一致、変更済みキャッシュ、Drive保存制約、空き容量、ポート競合、A100/RAMの検査、
 変種とcontextの選択（未知の値をビルド・取得前に拒否）、エンジンキャッシュキーの分離、
 llama-serverのsm_80ビルドとDriveキャッシュの復元・保存、Mayaのengine restore/saveとconfigの `model_name` 上書き、

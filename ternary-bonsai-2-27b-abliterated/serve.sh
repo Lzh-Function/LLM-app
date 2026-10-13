@@ -10,7 +10,7 @@ fi
 exec ../llama-prism/llama-server \
     --model models/Ternary-Bonsai-2-27B-Abliterated-PQ2_0.gguf \
     --mmproj "$MMPROJ" --no-mmproj-offload \
-    --alias ternary-bonsai-2-27b-abliterated \
+    --alias ternary-bonsai-2-27b-abliterated --metrics \
     --host "${HOST:-127.0.0.1}" --port "${PORT:-5071}" \
     --ctx-size "${CTX_SIZE:-16384}" \
     --parallel 1 \

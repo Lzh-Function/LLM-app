@@ -24,6 +24,67 @@ ROOT = HERE.parents[1]
 STATE = HERE / '.runtime'
 SESSION = 'strata-qwen'
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+BOOTSTRAP_DIAGNOSTICS = r"""
+import pathlib, re
+path = pathlib.Path('/content/strata-qwen') / 'bootstrap.log'
+text = path.read_text(errors='replace') if path.exists() else ''
+print('\n'.join(text.splitlines()[-80:]))
+matches = re.findall(r'^COLAB_PRIVACY_DIAGNOSTIC=(/dev/shm/colab-privacy-[^\s/]+/inference\.log)$', text, re.M)
+if matches:
+    log = pathlib.Path(matches[-1])
+    if log.exists():
+        print('\n--- Inference diagnostics (copied from RAM) ---')
+        with log.open('rb') as stream:
+            stream.seek(max(0, log.stat().st_size - 65536))
+            print(stream.read().decode(errors='replace'))
+"""
+BOOTSTRAP_READER = r"""
+import json, re, sys
+from pathlib import Path
+work = Path(sys.argv[1])
+try:
+    pid = int((work / 'bootstrap.pid').read_text())
+    alive = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
+except (OSError, ValueError, IndexError):
+    alive = False
+
+def new_lines(path, offset):
+    if not path or not path.is_file():
+        return '', 0, 0
+    with path.open('rb') as stream:
+        size = stream.seek(0, 2)
+        if size < offset:
+            offset = 0
+        stream.seek(offset)
+        lines = []
+        start_offset = offset
+        while stream.tell() - start_offset < 1024 * 1024:
+            start = stream.tell()
+            line = stream.readline()
+            if not line:
+                break
+            if not line.endswith(b'\n') and alive:
+                stream.seek(start)
+                break
+            lines.append(line)
+        return b''.join(lines).decode('utf-8', errors='replace'), stream.tell(), size
+
+bootstrap = work / 'bootstrap.log'
+text, offset, size = new_lines(bootstrap, int(sys.argv[2]))
+with bootstrap.open('rb') as stream:
+    stream.seek(max(0, size - 65536))
+    recent = stream.read().decode(errors='replace')
+matches = re.findall(r'^COLAB_PRIVACY_DIAGNOSTIC=(/dev/shm/colab-privacy-[^\s/]+/inference\.log)$',
+                     recent, re.M)
+ram_path = matches[-1] if matches else ''
+ram_offset = int(sys.argv[3]) if ram_path == sys.argv[4] else 0
+ram_text, ram_offset, ram_size = new_lines(Path(ram_path) if ram_path else None, ram_offset)
+# Inference output travels over SSH to the local terminal, never to bootstrap.log.
+failed = ((work / 'failed').exists()
+          or (not alive and offset >= size and ram_offset >= ram_size))
+print(json.dumps({'offset': offset, 'ram_offset': ram_offset, 'ram_path': ram_path,
+                  'text': text + ram_text, 'failed': failed}))
+"""
 
 
 def say(message):
@@ -133,6 +194,10 @@ def codex_command(port, context, arguments, profile):
     return command + list(arguments)
 
 
+class CommandTimeout(RuntimeError):
+    """A local command deadline, distinguishable from remote Python failures."""
+
+
 class Session:
     def __init__(self, args):
         self.args = args
@@ -141,6 +206,9 @@ class Session:
         self.owned = False
         self.drive_mounted = False
         self.master = None
+        self.bootstrap_offset = 0
+        self.inference_offset = 0
+        self.inference_log = ''
         self.socket = f'/tmp/strata-qwen-{os.getuid()}-{uuid.uuid4().hex[:12]}.sock'
 
     def run(self, command, *, timeout=None, stream_output=False, progress=None, **kwargs):
@@ -172,7 +240,7 @@ class Session:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=3)
-            raise RuntimeError(f'{command[0]} の待機時間上限（{timeout}秒）を超えました。') from None
+            raise CommandTimeout(f'{command[0]} の待機時間上限（{timeout}秒）を超えました。') from None
         finally:
             for stream in (process.stdout, process.stderr):
                 if stream is not None:
@@ -210,23 +278,48 @@ class Session:
     def colab(self, *arguments, **kwargs):
         return self.run(['colab', *arguments], **kwargs)
 
-    def code(self, code, *, quiet=False, timeout=60, progress=None):
-        # colab-cli can exit 0 even when the notebook raises an exception.
-        # Only a marker printed AFTER executing the entire script proves success.
-        marker = 'STRATA_EXEC_OK_' + uuid.uuid4().hex
-        path = STATE / 'execute.py'
-        path.write_text(f'exec(compile({code!r}, "strata-setup", "exec"))\nprint({marker!r})\n')
-        output = self.colab('exec', '-s', SESSION, '-f', str(path), '--timeout', str(max(1, timeout - 5)),
-                            timeout=timeout, progress=progress,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        lines = output.splitlines()
-        completed = marker in lines
-        output = '\n'.join(line for line in lines if line != marker)
-        if output and not quiet:
-            print(output, flush=True)
-        if not completed:
-            raise RuntimeError('Colab側のPython実行に失敗しました（実行完了を確認できません）。')
-        return output
+    def save_code_failure(self, stage, attempt, timeout, error_type):
+        # Control metadata only; never copy authentication headers or VM output.
+        path = STATE / 'setup-error.json'
+        record = {'time_unix': time.time(), 'stage': stage, 'attempt': attempt,
+                  'timeout_seconds': timeout, 'error_type': error_type}
+        path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n')
+        path.chmod(0o600)
+
+    def code(self, code, *, quiet=False, timeout=60, progress=None, retry_safe=False,
+             stage='Colabセル実行'):
+        # Only explicitly idempotent setup may be retried. In particular, never
+        # retry Popen/bootstrap or Drive flush after an ambiguous client timeout.
+        attempts = 3 if retry_safe else 1
+        for attempt in range(1, attempts + 1):
+            # colab-cli can exit 0 even when notebook Python raises. A marker
+            # printed AFTER the whole script proves completion; source echoes do not.
+            marker = 'STRATA_EXEC_OK_' + uuid.uuid4().hex
+            path = STATE / 'execute.py'
+            path.write_text(f'exec(compile({code!r}, "strata-setup", "exec"))\nprint({marker!r})\n')
+            try:
+                output = self.colab('exec', '-s', SESSION, '-f', str(path),
+                                    '--timeout', str(max(1, timeout - 5)), timeout=timeout,
+                                    progress=progress, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True)
+            except CommandTimeout as exc:
+                self.save_code_failure(stage, attempt, timeout, type(exc).__name__)
+                if attempt < attempts:
+                    say(f'{stage}: {timeout:g}秒で完了を確認できませんでした。接続を作り直して再試行します（{attempt + 1}/{attempts}）。')
+                    continue
+                raise CommandTimeout(f'{stage}: {exc} 診断: {STATE / "setup-error.json"}') from None
+            except subprocess.CalledProcessError as exc:
+                self.save_code_failure(stage, attempt, timeout, type(exc).__name__)
+                raise
+            lines = output.splitlines()
+            completed = marker in lines
+            output = '\n'.join(line for line in lines if line != marker)
+            if output and not quiet:
+                print(output, flush=True)
+            if not completed:
+                self.save_code_failure(stage, attempt, timeout, 'IncompleteExecution')
+                raise RuntimeError(f'{stage}: Colab側のPython実行に失敗しました（実行完了を確認できません）。')
+            return output
 
     def allocate(self):
         if not shutil.which('colab'):
@@ -325,6 +418,15 @@ class Session:
             raise RuntimeError('SSH connection lost: ' + result.stderr.strip())
         return result.stdout
 
+    def bootstrap_output(self):
+        result = json.loads(self.ssh(shlex.join([
+            'python3', '-c', BOOTSTRAP_READER, '/content/strata-qwen',
+            str(self.bootstrap_offset), str(self.inference_offset), self.inference_log])))
+        self.bootstrap_offset = result['offset']
+        self.inference_offset = result['ram_offset']
+        self.inference_log = result['ram_path']
+        return result['text'] + ('\nSTRATA_BOOTSTRAP_FAILED\n' if result['failed'] else '')
+
     def start(self):
         remote_port = json.loads((HERE / 'manifest.json').read_text())['server_port']
         if not isinstance(remote_port, int) or not 1 <= remote_port <= 65535 or remote_port == 8080:
@@ -339,17 +441,25 @@ class Session:
             self.run(['ssh-keygen', '-t', 'ed25519', '-N', '', '-f', str(identity), '-q'])
         self.allocate()
         self.mount_drive()
-        self.code("from pathlib import Path\nimport os\nassert os.path.ismount('/content/drive') and Path('/content/drive/MyDrive').is_dir(), 'Drive mount failed'\nPath('/content/strata-qwen').mkdir(exist_ok=True)\n")
+        say('Drive認証後のruntime再接続・準備を確認します（1回最大120秒、タイムアウト時は最大3回）。')
+        self.code("from pathlib import Path\nimport os\nassert os.path.ismount('/content/drive') and Path('/content/drive/MyDrive').is_dir(), 'Drive mount failed'\nPath('/content/strata-qwen').mkdir(exist_ok=True)\n",
+                  timeout=120, retry_safe=True, stage='runtime再接続・準備',
+                  progress='runtime再接続・準備の完了を待っています。')
         for name in ('remote.py', 'manifest.json'):
             self.colab('upload', '-s', SESSION, str(HERE / name), 'content/strata-qwen/' + name, timeout=45)
-        remote_args = ['python3', '-u', '/content/strata-qwen/remote.py', '--data-dir', self.args.data_dir,
-                       '--context', str(self.args.context), '--variant', self.variant]
+        self.colab('upload', '-s', SESSION, str(HERE.parent / 'colab_privacy.py'),
+                   'content/strata-qwen/colab_privacy.py', timeout=45)
+        remote_args = ['python3', '-B', '-u', '/content/strata-qwen/remote.py', '--data-dir', self.args.data_dir,
+                       '--context', str(self.args.context), '--variant', self.variant,
+                       '--engine-ready-seconds', str(self.args.startup_minutes * 60)]
         if self.args.reverify:
             remote_args.append('--reverify')
+        remote_args.append('--skip-cache-mtime' if getattr(self.args, 'skip_cache_mtime', True)
+                           else '--no-skip-cache-mtime')
         self.code('import subprocess\nfrom pathlib import Path\n'
                   "log=open('/content/strata-qwen/bootstrap.log','ab',buffering=0)\n"
                   f'p=subprocess.Popen({remote_args!r},stdout=log,stderr=log,start_new_session=True)\n'
-                  "Path('/content/strata-qwen/bootstrap.pid').write_text(str(p.pid))\nprint('BOOTSTRAP_PID',p.pid)\n")
+                  "Path('/content/strata-qwen/bootstrap.pid').write_text(str(p.pid))\nprint('BOOTSTRAP_PID',p.pid)\n", stage='モデル準備プロセス起動')
         proxy = shlex.join(['colab', 'ssh', '--proxy-mode', '-s', SESSION, '--identity', str(identity)])
         ssh_log = (STATE / 'ssh.log').open('ab', buffering=0)
         command = ['ssh', '-M', '-S', self.socket, '-N', '-i', str(identity),
@@ -364,7 +474,6 @@ class Session:
         ssh_log.close()
         self.children.append(self.master)
         deadline = time.monotonic() + self.args.startup_minutes * 60
-        last_tail = None
         while time.monotonic() < deadline:
             if self.master.poll() is not None:
                 raise RuntimeError(f'SSH tunnel failed. See {STATE / "ssh.log"}')
@@ -372,31 +481,31 @@ class Session:
                 say(f'準備完了: http://127.0.0.1:{self.args.port}/v1 ({self.variant})')
                 return
             if Path(self.socket).exists():
-                tail = self.ssh("tail -n 4 /content/strata-qwen/bootstrap.log; "
-                                "pid=$(cat /content/strata-qwen/bootstrap.pid); state=$(ps -o stat= -p \"$pid\"); "
-                                "case \"$state\" in ''|Z*) echo STRATA_BOOTSTRAP_FAILED;; esac; "
-                                "if test -f /content/strata-qwen/failed; then echo STRATA_BOOTSTRAP_FAILED; fi")
-                if tail != last_tail:
+                tail = self.bootstrap_output()
+                if tail:
                     print(tail.rstrip(), flush=True)
-                    last_tail = tail
                 if 'STRATA_BOOTSTRAP_FAILED' in tail:
-                    full = self.ssh('tail -n 80 /content/strata-qwen/bootstrap.log')
+                    full = self.ssh('python3 -c ' + shlex.quote(BOOTSTRAP_DIAGNOSTICS))
                     (STATE / 'bootstrap-error.log').write_text(full)
                     raise RuntimeError(f'Bootstrap failed. See {STATE / "bootstrap-error.log"}')
             time.sleep(5)
         raise RuntimeError('Startup timed out; attempting Drive sync before stopping the runtime.')
 
     def flush_drive(self):
-        minutes = getattr(self.args, 'flush_minutes', 10.0)
+        minutes = getattr(self.args, 'flush_minutes', 1440.0)
         seconds = max(1, int(minutes * 60))
         say(f'GDriveの未同期データを同期してから停止します（最大{minutes:g}分）。')
         helper = (HERE / 'shutdown_remote.py').read_text()
         code = (f'ns={{"__name__":"strata_shutdown"}}\nexec(compile({helper!r}, "strata-shutdown", "exec"), ns)\n'
                 f'result=ns["shutdown"]({seconds})\nprint("STRATA_DRIVE_SYNC=" + result)\n')
         record = {'time_unix': time.time(), 'timeout_seconds': seconds, 'confirmed': False}
+        path = STATE / 'drive-sync-status.json'
+        path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n')
+        path.chmod(0o600)
         try:
-            output = self.code(code, quiet=True, timeout=seconds + 30,
-                               progress='GDriveの同期完了を待っています。同期中もruntimeは稼働しています。')
+            output = self.code(code, quiet=True, timeout=seconds + 180,
+                               progress='GDriveの同期完了を待っています。同期中もruntimeは稼働しています。',
+                               stage='GDrive同期')
             if 'STRATA_DRIVE_SYNC=flushed' not in output.splitlines():
                 raise RuntimeError('Drive was not mounted; cloud sync could not be confirmed.')
             record['confirmed'] = True
@@ -404,10 +513,10 @@ class Session:
             say('GDriveの同期完了を確認しました。')
         except Exception as exc:
             record['error_type'] = type(exc).__name__
-            say('GDriveの同期完了を確認できませんでした。未同期ファイルは次回再取得が必要になる可能性があります。')
-        path = STATE / 'drive-sync-status.json'
+            say('GDriveの同期完了を確認できませんでした。未同期データを保護するためruntimeを残します。')
+            say('再試行: ./colab-qwen stop（待機中もruntimeの利用時間を消費します）。')
+        record['finished_at'] = time.time()
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n')
-        path.chmod(0o600)
         return record['confirmed']
 
     def close(self):
@@ -425,10 +534,9 @@ class Session:
                     child.wait()
         sync_confirmed = True
         if self.owned:
-            try:
-                if self.drive_mounted:
-                    sync_confirmed = self.flush_drive()
-            finally:
+            if self.drive_mounted:
+                sync_confirmed = self.flush_drive()
+            if sync_confirmed:
                 say('runtimeを停止します。')
                 stop_runtime()
         return sync_confirmed
@@ -443,27 +551,44 @@ def stop_runtime():
     say('runtime停止を確認しました。')
 
 
-def stop():
+def stop(args=None):
     path = STATE / 'session.json'
-    if path.is_file():
-        state = json.loads(path.read_text())
-        pid = state['pid']
-        if proc_identity(pid) == state.get('identity') and pid != os.getpid():
-            os.kill(pid, signal.SIGTERM)
-            # The owner stops children/runtime before releasing its lock.
-            deadline = time.monotonic() + state.get('flush_minutes', 10.0) * 60 + 240
-            notice = time.monotonic() + 30
-            say('起動元の終了処理とGDrive同期を待ちます。')
-            while time.monotonic() < deadline:
-                if proc_identity(pid) != state.get('identity') or not path.exists():
-                    break
-                if time.monotonic() >= notice:
-                    say('起動元の同期・停止処理を待っています。')
-                    notice = time.monotonic() + 30
-                time.sleep(0.25)
-            else:
-                say('起動元の停止待ちが上限に達しました。同期未完了の可能性がありますがruntimeを停止します。')
-    stop_runtime()  # Works after a crashed/killed supervisor, too.
+    state = json.loads(path.read_text()) if path.is_file() else {}
+    pid = state.get('pid')
+    owner_alive = bool(pid and pid != os.getpid() and state.get('identity') is not None
+                       and proc_identity(pid) == state['identity'])
+    if getattr(args, 'force', False):
+        # --force explicitly chooses runtime release over outstanding writes.
+        if owner_alive:
+            os.kill(pid, signal.SIGKILL)
+        stop_runtime()
+        path.unlink(missing_ok=True)
+        return
+    minutes = getattr(args, 'flush_minutes', 1440.0)
+    if owner_alive:
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + max(minutes, state.get('flush_minutes', minutes)) * 60 + 240
+        notice = time.monotonic() + 30
+        say('起動元の終了処理とGDrive同期を待ちます。')
+        while proc_identity(pid) == state['identity'] and path.exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError('起動元の同期待ちが上限に達しました。未同期データ保護のためruntimeを残しています。')
+            if time.monotonic() >= notice:
+                say('起動元の同期・停止処理を待っています。')
+                notice = time.monotonic() + 30
+            time.sleep(0.25)
+    # A crashed owner or a previous flush failure still needs a verified flush.
+    result = subprocess.run(['colab', 'status', '-s', SESSION], check=True,
+                            capture_output=True, text=True, timeout=60)
+    if f"Session '{SESSION}' not found." in result.stdout:
+        path.unlink(missing_ok=True)
+        say('runtime停止を確認しました。')
+        return
+    instance = Session(argparse.Namespace(flush_minutes=minutes))
+    if not instance.flush_drive():
+        raise RuntimeError('GDriveの同期を確認できないためruntimeを停止していません。')
+    stop_runtime()
+    path.unlink(missing_ok=True)
 
 
 def interrupted(signum, frame):
@@ -474,17 +599,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['start', 'stop', 'codex', 'client', 'status', 'doctor', 'check-drive'])
     parser.add_argument('--port', type=int, default=8085)
-    parser.add_argument('--context', type=int, choices=[32768, 65536, 131072], default=131072)
+    parser.add_argument('--context', type=int, choices=[32768, 65536, 131072, 262144], default=262144)
     parser.add_argument('--data-dir', default='/content/drive/MyDrive/Strata-data')
     parser.add_argument('--variant', help='Model variant: standard or uncensored (default from manifest.json)')
     parser.add_argument('--max-hours', type=float, default=4.0, help='Hard runtime lifetime, including setup (default 4 hours)')
     parser.add_argument('--startup-minutes', type=float, default=180.0)
-    parser.add_argument('--flush-minutes', type=float, default=10.0,
-                        help='Maximum Drive flush wait during shutdown (default 10 minutes; extra to max-hours)')
+    parser.add_argument('--flush-minutes', type=float, default=1440.0,
+                        help='Drive flush wait (default 24 hours, as in Colab; failure preserves runtime; extra to max-hours)')
+    parser.add_argument('--force', action='store_true', help='stop only: skip Drive sync and discard outstanding writes')
     parser.add_argument('--reverify', action='store_true', help='Read and hash all cached model files again')
+    parser.add_argument('--skip-cache-mtime', action=argparse.BooleanOptionalAction, default=True,
+                        help='Ignore modification time of size/SHA-256 verified cache (default); --reverify wins')
     parser.add_argument('--drive-auth', choices=['cli', 'browser'], default='cli',
                         help='Drive mounting via CLI or the browser UI of the existing runtime')
     args, extra = parser.parse_known_args()
+    if args.force and args.command != 'stop':
+        parser.error('--force is supported only with stop')
     if extra[:1] == ['--']:
         extra = extra[1:]
     if extra and args.command not in ('client', 'codex'):
@@ -507,7 +637,7 @@ def main():
         say('Codex model catalog generated; no runtime allocated.')
         return 0
     if args.command == 'stop':
-        stop()
+        stop(args)
         return 0
     if args.command == 'status':
         subprocess.run(['colab', 'status', '-s', SESSION], check=True)
@@ -567,14 +697,15 @@ def main():
         try:
             sync_confirmed = session.close()
         except Exception:
-            say('自動停止を確認できません。colab stop -s strata-qwen を実行してください。')
+            say('終了処理に失敗しました。runtimeを確認し、./colab-qwen stop で同期・停止を再試行してください。')
             raise
         else:
-            state_path.unlink(missing_ok=True)
+            if sync_confirmed is not False:
+                state_path.unlink(missing_ok=True)
         finally:
             lock.close()
         if sync_confirmed is False and sys.exc_info()[0] is None:
-            raise RuntimeError('runtimeは停止済みですが、GDriveの同期完了を確認できませんでした。drive-sync-status.jsonを確認してください。')
+            raise RuntimeError('GDriveの同期完了を確認できずruntimeを残しています。drive-sync-status.jsonを確認してください。')
     return result
 
 

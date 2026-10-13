@@ -11,7 +11,7 @@ fi
 exec ../llama.cpp/llama-server \
     --model models/Qwen3.5-9B-UD-Q5_K_XL.gguf \
     --mmproj "$MMPROJ" --no-mmproj-offload \
-    --alias qwen3.5-9b \
+    --alias qwen3.5-9b --metrics \
     --host "${HOST:-127.0.0.1}" --port "${PORT:-5071}" \
     --ctx-size "${CTX_SIZE:-32768}" \
     --n-gpu-layers all \

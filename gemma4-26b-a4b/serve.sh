@@ -12,7 +12,7 @@ fi
 exec ../llama.cpp/llama-server \
     --model models/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf \
     --mmproj "$MMPROJ" --no-mmproj-offload \
-    --alias gemma4-26b-a4b \
+    --alias gemma4-26b-a4b --metrics \
     --host "${HOST:-127.0.0.1}" --port "${PORT:-5071}" \
     --ctx-size "${CTX_SIZE:-32768}" \
     --flash-attn on \
