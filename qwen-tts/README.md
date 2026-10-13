@@ -6,7 +6,7 @@ LLMアンロード・GPU排他・モデル切り替え・長文作品保存は`v
 ```bash
 cd /workspace/LLM
 bash qwen-tts/setup.sh
-bash voice-synthesize/serve.sh
+./llm studio
 ```
 
 `http://localhost:5080`で「Qwen3-TTS 1.7B」を選び、声の説明と原稿を入力して制作する。

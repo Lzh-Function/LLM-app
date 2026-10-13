@@ -21,6 +21,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+LLM_COMMAND = ROOT / 'llm'
 STATE = HERE / '.runtime'
 SESSION = 'glm53-a100'
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -338,7 +339,7 @@ class Session:
             raise RuntimeError('colab is required.')
         status = self.colab('status', '-s', SESSION, stdout=subprocess.PIPE, text=True, timeout=30)
         if f"Session '{SESSION}' not found." not in status:
-            raise RuntimeError(f'Session {SESSION} already exists. Use ./colab-glm stop first.')
+            raise RuntimeError(f'Session {SESSION} already exists. Use {LLM_COMMAND} colab glm stop first.')
         self.owned = True  # Also clean up an allocation interrupted before READY.
         say('ColabにA100 high-memの割当を要求します（最大5分）。')
         try:
@@ -392,7 +393,7 @@ class Session:
             self.drive_mounted = True
             return
         if not sys.stdin.isatty():
-            raise RuntimeError('GDrive authorization needs a terminal. Run ./colab-glm start in your terminal.')
+            raise RuntimeError(f'GDrive authorization needs a terminal. Run {LLM_COMMAND} colab glm start in your terminal.')
         try:
             if getattr(self.args, 'drive_auth', 'cli') == 'browser':
                 self.mount_drive_browser(probe)
@@ -536,7 +537,7 @@ class Session:
                     print(tail.rstrip(), flush=True)
                     last_notice = time.monotonic()
                 elif time.monotonic() - last_notice >= 30:
-                    say('新しいログがまだありません。別ターミナルの ./colab-glm progress で読取位置・子プロセスを確認できます。')
+                    say(f'新しいログがまだありません。別ターミナルの {LLM_COMMAND} colab glm progress で読取位置・子プロセスを確認できます。')
                     last_notice = time.monotonic()
                 if 'GLM_BOOTSTRAP_FAILED' in tail:
                     self.save_bootstrap_error()
@@ -569,7 +570,7 @@ class Session:
         except Exception as exc:
             record['error_type'] = type(exc).__name__
             say('GDriveの同期完了を確認できませんでした。未同期データを保護するためruntimeを残します。')
-            say('再試行: ./colab-glm stop（待機中もruntimeの利用時間を消費します）。')
+            say(f'再試行: {LLM_COMMAND} colab glm stop（待機中もruntimeの利用時間を消費します）。')
         record['finished_at'] = time.time()
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n')
         return record['confirmed']
@@ -727,7 +728,7 @@ def main():
     if args.command == 'client':
         info = health(args.port)
         if not info:
-            raise RuntimeError('Start ./colab-glm start in another terminal first.')
+            raise RuntimeError(f'Start {LLM_COMMAND} colab glm start in another terminal first.')
         running, profile = profile_for_model(info['model'])
         if args.variant and args.variant != running:
             raise RuntimeError(f'稼働中の変種は {running} です。{args.variant} を使うには先に stop して起動し直す。')
@@ -767,8 +768,8 @@ def main():
             child = subprocess.Popen(codex_command(args.port, args.context, extra, session.profile))
             session.children.append(child)
         else:
-            say('このターミナルは起動したまま使います。Ctrl+C または別ターミナルの ./colab-glm stop で終了。')
-            say('Codex: ./colab-glm client -- [Codex arguments]')
+            say(f'このターミナルは起動したまま使います。Ctrl+C または別ターミナルの {LLM_COMMAND} colab glm stop で終了。')
+            say(f'Codex: {LLM_COMMAND} colab glm client -- [Codex arguments]')
             say(f'起動した変種: {session.variant} ({session.profile["model"]}, context {args.context})')
         while True:
             if session.master.poll() is not None:
@@ -785,7 +786,7 @@ def main():
         try:
             sync_confirmed = session.close()
         except Exception:
-            say('終了処理に失敗しました。runtimeを確認し、./colab-glm stop で同期・停止を再試行してください。')
+            say(f'終了処理に失敗しました。runtimeを確認し、{LLM_COMMAND} colab glm stop で同期・停止を再試行してください。')
             raise
         else:
             if sync_confirmed is not False:

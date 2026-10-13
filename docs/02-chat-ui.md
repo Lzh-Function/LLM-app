@@ -5,13 +5,13 @@
 - ブラウザから 8 モデルを**いつでも切り替えて**チャットできる UI。ポート **5070** (devcontainer で転送済み)。
 - `/workspace/LLM/*/model.toml` を持つディレクトリを自動検出する。
   Bonsai 2 と Qwen3.8 Flash Next の `thinking_mode = "reasoning_effort"` は思考オンを medium に設定する。
-- 選択されたモデルの `serve.sh` を内部ポート **5071** で 1 つだけ起動し、チャットを中継する。
+- 選択されたモデルを `./llm model <ID>` 経由で内部ポート **5071** に 1 つだけ起動し、チャットを中継する。
   Qwen3.8 Flash Next は [Strata](07-strata.md)、その他は llama-server を使用する。
 - 会話履歴の保存 (任意)、ウェブ検索 (任意、[03](03-web-search.md))。
 
 ```
 ブラウザ ──:5070──▶ llm-chat (FastAPI)
-                     ├─ ModelManager ── bash serve.sh (PORT=5071) ──▶ llama-server
+                     ├─ ModelManager ── ./llm model <ID> (PORT=5071) ──▶ llama-server / Strata
                      ├─ /api/chat ──(SSE 中継)──▶ :5071/v1/chat/completions
                      ├─ agent.run ── web_search / fetch_page (検索オン時)
                      └─ history/ に JSON + Markdown 保存
@@ -26,7 +26,7 @@ uv add fastapi "uvicorn[standard]" httpx
 uv add ddgs trafilatura          # ウェブ検索用 (03 参照)
 
 uvx ruff check --fix src && uvx ruff format src   # lint / format
-uv run llm-chat                                   # 起動 (http://localhost:5070)
+cd /workspace/LLM && ./llm chat               # 起動 (http://localhost:5070)
 ```
 
 `pyproject.toml` の `[project.scripts] llm-chat = "llm_chat:main"` によりコマンド化されている。
@@ -97,7 +97,7 @@ curl -s -X POST localhost:5070/api/unload
 |---|---|
 | `snapshot()` | UI 向け状態 dict |
 | `request_load(model_id)` | 状態を即 `loading` にして `_load` をバックグラウンドタスクで起動。同じモデルが loading/ready なら何もしない |
-| `_load(model_id)` | `asyncio.Lock` 下で旧プロセス停止 → `bash serve.sh` を `HOST=127.0.0.1 PORT=5071` で起動 (`start_new_session=True` でプロセスグループ化、出力は `server.log`) → `_wait_healthy` で待機。途中で別モデルが選ばれたら中断 |
+| `_load(model_id)` | `asyncio.Lock` 下で旧プロセス停止 → `./llm model <ID>` を `HOST=127.0.0.1 PORT=5071` で起動 (`start_new_session=True` でプロセスグループ化、出力は `server.log`) → `_wait_healthy` で待機。途中で別モデルが選ばれたら中断 |
 | `_wait_healthy(proc)` | `/health` が 200 になるまで 0.5 秒間隔でポーリング (最大 900 秒)。プロセス終了なら失敗 |
 | `_stop_proc()` | `os.killpg(SIGTERM)` → 20 秒待って応答なければ `SIGKILL` |
 | `unload()` | 停止して状態を `stopped` に |

@@ -185,18 +185,18 @@ GPUメモリは監視APIの報告で最大11,844MiB、GPUキャッシュは3,898
 テキスト・思考モード・画像添付を既存 UI から利用できる。
 
 ```bash
-cd /workspace/LLM/llm-chat
-uv run llm-chat
+cd /workspace/LLM
+./llm chat
 # ブラウザで http://localhost:5070 を開く
 ```
 
 単体の OpenAI 互換 Chat Completions API は以下で起動する。ブラウザは自動で開かない。
 
 ```bash
-PORT=8080 bash /workspace/LLM/qwen3.8-flash-next/serve.sh
+PORT=8080 ./llm model qwen3.8-flash-next
 # http://127.0.0.1:8080/v1/chat/completions
 # 長さを変更する場合:
-CTX_SIZE=196608 PORT=8080 bash /workspace/LLM/qwen3.8-flash-next/serve.sh
+CTX_SIZE=196608 PORT=8080 ./llm model qwen3.8-flash-next
 ```
 
 0.1.39から `/v1/responses` も利用できる（stateless方式、上の対応範囲を参照）。
@@ -231,7 +231,7 @@ bash /workspace/LLM/qwen3.8-flash-next/setup.sh
 `setup.sh` は `install_sc117.py` を使い、上流のモデル選択セットアップは呼び出さない。
 既存のStrataエンジン・専用venv・MTP・画像モデルが必要。新規のStrata本体導入は上流の手順に従う。
 SC117のGGUFとpackだけを取得・生成し、追加の巨大なモデルキャッシュや `experts.bin` を作らない。
-統合UIからは上記 `serve.sh` を使う。ブラウザは自動で開かない。
+統合UIからは `./llm model qwen3.8-flash-next` を経由して内部の `serve.sh` を使う。ブラウザは自動で開かない。
 `strata/` と `Strata-data/` は親リポジトリの Git 管理対象から除外している。
 モデルの配布リビジョンは固定し、Strataの既存チェックアウト・エンジンは自動更新しない。
 サーバーを停止し、Strataソースの変更を `git -C /workspace/LLM/strata status --short` で確認してから更新する。

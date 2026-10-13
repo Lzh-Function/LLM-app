@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import shlex
 import socket
 import sys
@@ -38,6 +39,7 @@ class VoiceRuntimeTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='speech runtime ')
         self.root = Path(self.temp.name)
+        shutil.copy2(Path(__file__).resolve().parents[2] / 'llm', self.root / 'llm')
         self.port = unused_port()
         self.urls = {'voicevox': f'http://127.0.0.1:{self.port}'}
         self.runtime = voice_runtime.VoiceRuntime(self.root, self.urls)

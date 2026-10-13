@@ -1,19 +1,19 @@
 # Codex with local Flash Next / Qwen3.5-9B / Bonsai 2
 
-Colab A100 high-mem + GDriveのIQ3_Sは、`/workspace/LLM/colab-qwen codex`で起動から終了時のruntime停止まで行う。
-初回は自分のターミナルでGDriveのブラウザ認証を行う。個別の起動・停止は `colab-qwen start` / `colab-qwen stop`。
-無検閲版のIQ3_Sは `colab-qwen codex --variant uncensored` で起動する（既定は通常版）。
+Colab A100 high-mem + GDriveのIQ3_Sは、`/workspace/LLM/llm colab qwen codex`で起動から終了時のruntime停止まで行う。
+初回は自分のターミナルでGDriveのブラウザ認証を行う。個別の起動・停止は `./llm colab qwen start` / `./llm colab qwen stop`。
+無検閲版のIQ3_Sは `./llm colab qwen codex --variant uncensored` で起動する（既定は通常版）。
 [Colab版の手順と確認状況](colab-qwen/README.md)を参照。
 
-GLM-5.3／Flashは `/workspace/LLM/colab-glm codex` で同じ手順で起動する。既定は `flash`（Project Maya）、無検閲Flashは `--variant flash-uncensored`、通常版GLM-5.3は `--variant full`。
+GLM-5.3／Flashは `/workspace/LLM/llm colab glm codex` で同じ手順で起動する。既定は `flash`（Project Maya）、無検閲Flashは `--variant flash-uncensored`、通常版GLM-5.3は `--variant full`。
 重みだけでなくビルド済みのA100エンジンもGDriveにキャッシュし、2回目以降は再ビルドしない。
-サーバーを起動せずに3変種分のダウンロードとエンジンビルドだけまとめて済ませるなら `colab-glm prepare`。
+サーバーを起動せずに3変種分のダウンロードとエンジンビルドだけまとめて済ませるなら `./llm colab glm prepare`。
 [Colab GLM版の手順と確認状況](colab-glm/README.md)を参照。
 
 ```bash
 cd /workspace/LLM
 uv run codex/setup.py
-bash codex/serve.sh flash-next
+./llm codex flash-next
 # 別のターミナルから、作業ディレクトリで:
 codex -p flash-next
 ```
@@ -22,9 +22,9 @@ codex -p flash-next
 
 | モデル | サーバー起動 | Codex起動 | API |
 | --- | --- | --- | --- |
-| Flash Next | `bash codex/serve.sh flash-next` | `codex -p flash-next` | `127.0.0.1:8080/v1` |
-| Qwen3.5-9B | `bash codex/serve.sh qwen-9b` | `codex -p qwen-9b` | `127.0.0.1:8083/v1` |
-| Bonsai 2 | `bash codex/serve.sh bonsai` | `codex -p bonsai` | `127.0.0.1:8081/v1` |
+| Flash Next | `./llm codex flash-next` | `codex -p flash-next` | `127.0.0.1:8080/v1` |
+| Qwen3.5-9B | `./llm codex qwen-9b` | `codex -p qwen-9b` | `127.0.0.1:8083/v1` |
+| Bonsai 2 | `./llm codex bonsai` | `codex -p bonsai` | `127.0.0.1:8081/v1` |
 
 旧`codex -p qwen`はFlash Nextの互換名として残す。既存のプロジェクト信頼設定と手動追加MCPは、新しい`flash-next`プロファイルへの初回移行時に引き継ぐ。
 GPUを使うモデルは一度に一つ。切り替える前にサーバーをCtrl+Cで停止する。
@@ -60,7 +60,7 @@ Qwenのネット検索は専用の`local_web_search` MCPで行う。セットア
 ```bash
 cd /workspace/LLM
 uv run codex/setup.py
-bash ternary-bonsai-2-27b-abliterated/serve-codex.sh
+./llm codex bonsai
 # 別のターミナルで、作業ディレクトリから:
 codex -p bonsai
 ```
@@ -82,7 +82,7 @@ QwenのStrata監視画面はQwen専用。Bonsaiの全文確認には保存ファ
 ## Qwen3.5-9B
 
 ```bash
-bash codex/serve.sh qwen-9b
+./llm codex qwen-9b
 # 別のターミナルで、作業ディレクトリから:
 codex -p qwen-9b
 # 全文の生成ログを追う:

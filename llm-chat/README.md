@@ -1,15 +1,17 @@
 # llm-chat — 統合ローカル LLM チャット
 
 `/workspace/LLM/*/model.toml` を持つディレクトリを LLM として自動検出し、
-ブラウザから選んだモデルの `serve.sh` (llama-server または Strata) を起動してチャットする。
+ブラウザから選んだモデルを `./llm model` 経由で起動してチャットする。内部では各モデルの `serve.sh` が llama-server または Strata を実行する。
 VRAM 12GB では 1 モデルずつしか載らないため、切り替え時は前のモデルを停止してから起動する。
 
 ## 起動
 
 ```bash
-cd /workspace/LLM/llm-chat
-uv run llm-chat          # http://localhost:5070
+cd /workspace/LLM
+./llm chat               # http://localhost:5070
 ```
+
+別の作業ディレクトリからは `/workspace/LLM/llm chat` と呼べる。
 
 - 画面上部でモデルを選び「切り替え」→ バッジが `ready` になったら送信可能
 - 会話の途中でモデルを切り替えても履歴はそのまま引き継がれる
@@ -57,7 +59,7 @@ APIは`POST /api/models/<id>/load`に`{"context_length": 131072}`を送る。
 
 llama.cppには`CTX_SIZE`経由で`--ctx-size`を渡し、統合UIでは1スロットとして使用する。
 Strataは`chat_server.py`がチャット専用の実行設定に`--max-context`を設定する。
-導入元の設定とCodexの128K設定は書き換えない。単体起動でも`CTX_SIZE=196608 bash qwen3.8-flash-next/serve.sh`で変更できる。
+導入元の設定とCodexの128K設定は書き換えない。単体起動でも`CTX_SIZE=196608 ./llm model qwen3.8-flash-next`で変更できる。
 
 検証ではFlash Nextを統合APIから128Kで起動し、同じモデルを192Kへ変更してチャット応答を確認した。
 llama.cpp側もDolphinの8K起動・16Kへの再起動とチャット応答を確認した。
@@ -99,7 +101,7 @@ Bonsai の2モデルは親モデルの Q8_0 projector を共有する。画像�
 ブラウザーの録音ボタンで発話を文字起こしし、認識できたら自動送信する。
 「読み上げ」をオンにすると、応答本文を AivisSpeech Engine の「まお」「コハク」、または VOICEVOX Engine の「ずんだもん」「冥鳴ひまり」「中国うさぎ」「東北ずん子」「東北きりたん」で再生する。
 「声色を自動選択」がオンなら、話者は選択欄で指定し、声色は LLM が回答ごとに選ぶ。
-`uv run llm-chat` 起動時の読み上げはOFF。UIの「読み上げ」をONにすると導入済みの両エンジンをCPUで起動し、OFFにすると停止してメモリを解放する。LLMのロード状態は維持する。
+`./llm chat` 起動時の読み上げはOFF。UIの「読み上げ」をONにすると導入済みの両エンジンをCPUで起動し、OFFにすると停止してメモリを解放する。LLMのロード状態は維持する。
 すでに手動起動済みのサービスは再利用し、OFF時にも停止しない。チャット終了時にも、自身が起動した音声エンジンを停止する。
 起動手順、モデル、設定は
 [音声チャットの運用手順](../docs/06-voice-chat.md)を参照。
@@ -118,14 +120,13 @@ Irodori選択時はAivisSpeech/VOICEVOXを新たに起動しない。
 ```bash
 cd /workspace/LLM
 bash irodori-tts/setup.sh   # 専用CUDA環境、Large・MF・比較用RF・codecを導入
-cd llm-chat
-uv run llm-chat
+./llm chat
 ```
 
 「声ライブラリ」→「声作成モードを起動」→候補生成・登録→「会話モードで試す」→話者選択で利用する。
 保存先は`llm-chat/voice-library/`。起動時はOFFで、ON後にモデルのロードと短文ウォームアップを行う。
 CPU単独の初回動作確認ではMF4のRTF約1.09～1.36で、会話向けの目標にはまだ届いていない。
-高品質合成専用の独立UIは`bash voice-synthesize/serve.sh`（リポジトリ直下で実行）、`http://localhost:5080`。
+高品質合成専用の独立UIは`./llm studio`（リポジトリ直下で実行）、`http://localhost:5080`。
 原稿と声の説明からIrodori LargeまたはQwen3-TTS 1.7BをGPUで使って音声作品を制作し、`voice-synthesize/productions/`へWAV・原稿・設定・作品専用の声を保存する。
 会話用の声登録は不要。登録済みの声を使う場合も作品用に保存し、同じ参照WAVはSHA256でハードリンク共有する。ZIPは取得時に一時生成し、一式をダウンロードできる。GPU音声がONの間はLLMロードを409で止める。
 Qwenの導入・声作成・長文制作は[Qwen3-TTSの運用手順](../docs/09-qwen-tts.md)を参照。
@@ -179,4 +180,4 @@ Bonsai 2 のように思考オンで `reasoning_effort=medium` を使うモデ�
 画像対応モデルには `mmproj = "models/mmproj-F16.gguf"` のように画像用ファイルの相対パスを追加し、
 `serve.sh` に `--mmproj` を設定する。
 
-各 `serve.sh` は単体でも実行でき、`http://127.0.0.1:5071/v1` を OpenAI 互換 API として使える。
+単体のモデルAPIは `./llm model <ID>` で起動し、`http://127.0.0.1:5071/v1` を OpenAI 互換 API として使える。

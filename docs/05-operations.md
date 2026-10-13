@@ -4,15 +4,15 @@
 
 | 用途 | ポート | 起動 | 停止 |
 |---|---|---|---|
-| チャット UI | 5070 | `cd /workspace/LLM/llm-chat && uv run llm-chat` | Ctrl+C / `pkill -x llm-chat` |
+| チャット UI | 5070 | `cd /workspace/LLM && ./llm chat` | Ctrl+C / `pkill -x llm-chat` |
 | チャット UI 内部の llama-server | 5071 | UI から自動 | UI の「停止」/ `curl -X POST localhost:5070/api/unload` |
 | AivisSpeech / VOICEVOX | 10101 / 50021 | 起動時OFF。UIの「読み上げ」をONにすると起動（導入済み・ローカル接続先の場合） | 「読み上げ」をOFF、またはチャット終了で停止。手動起動したものはそのターミナルでCtrl+C |
-| Codex 用 Strata | 8080 | `bash qwen3.8-flash-next/serve-codex.sh` | 起動ターミナルでCtrl+C ([04 参照](04-codex.md#3-gpuとサーバー)) |
+| Codex 用 Strata | 8080 | `./llm codex flash-next` | 起動ターミナルでCtrl+C ([04 参照](04-codex.md#3-gpuとサーバー)) |
 
 バックグラウンドで起動する場合:
 
 ```bash
-cd /workspace/LLM/llm-chat && (nohup uv run llm-chat > chat.log 2>&1 &)
+cd /workspace/LLM && (nohup ./llm chat > llm-chat/chat.log 2>&1 &)
 ```
 
 特定ポートの llama-server だけ止める:

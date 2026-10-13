@@ -108,14 +108,14 @@ LargeはINT8/INT4を使わず、全パラメータを保持する。配布FP32�
 ```bash
 cd /workspace/LLM
 bash irodori-tts/setup.sh       # CUDA 12.8版、Large/MF/codec、BF16変換後FP32は削除
-bash voice-synthesize/serve.sh # http://localhost:5080
+./llm studio                  # http://localhost:5080
 ```
 
 llm-chatを使う場合は別ターミナルで:
 
 ```bash
-cd /workspace/LLM/llm-chat
-uv run llm-chat                # http://localhost:5070
+cd /workspace/LLM
+./llm chat                     # http://localhost:5070
 ```
 
 この環境にはCUDA版と全重みを導入済み。setup既定は`cu128`。再導入では`install.json`に記録したrevisionを維持し、更新時だけ`bash irodori-tts/setup.sh --update-models`を使う。重み・専用環境・ライブラリ・合成結果・ログはGit管理外。Largeにはモデルカード記載のGemma条件が適用される。

@@ -3,19 +3,20 @@
 GLM-5.3／GLM-5.3-Flashを、ColabのA100 high-memで実行する。
 起動時に**3変種**から選び、それぞれエンジンが異なる（`flash`はProject Maya、他2つはllama.cpp）。
 重み・Mayaのpack・ビルド済みエンジンはGDriveの `MyDrive/GLM53-data/` に保存する（Qwenの `MyDrive/Strata-data/` とは別フォルダ）。
-GGUFをローカルPCやColabの `/content` へコピーしない。ソース、Python環境、ビルドの作業ファイルだけをColabの一時ディスクに置く。
+GGUFはローカルPCにはコピーしない。推論時にはColabの `/content/glm53-a100/model-data/` へコピーを試し、容量・I/Oの問題があればDriveから直接読む。ソース、Python環境、ビルドの作業ファイルもColabの一時ディスクに置く。
 SSHでAPIをローカルの `127.0.0.1:8086` へ転送する。サーバー側は専用の `127.0.0.1:18081` のみで待ち受ける。
 ColabのJupyterが使う8080番との競合を避け、ビルド・取得より前にポートの空きを確認する。
 選定根拠と容量・速度の予算は [docs/14-colab-glm53-runtime-plan.md](../../docs/14-colab-glm53-runtime-plan.md)。
+起動・停止・診断はリポジトリ直下の `./llm colab glm ...` を使う。
 
 ## 変種の選択
 
 既定は `flash`。
 
 ```bash
-./colab-glm codex                              # flash（既定・Maya）
-./colab-glm codex --variant flash-uncensored   # 無検閲Flash（llama.cpp）
-./colab-glm start --variant full --context 32768
+./llm colab glm codex                              # flash（既定・Maya）
+./llm colab glm codex --variant flash-uncensored   # 無検閲Flash（llama.cpp）
+./llm colab glm start --variant full --context 32768
 ```
 
 | variant | 配布 | 量子化 | 重み | エンジン | context |
@@ -39,7 +40,7 @@ Driveマウント時のブラウザ認証では**表示された要求権限を�
 
 ```bash
 cd /workspace/LLM
-./colab-glm codex
+./llm colab glm codex
 ```
 
 この1コマンドが runtime作成→GDriveマウント・認証→GGUF取得・SHA-256検証→ソース取得・**エンジンビルド（sm_80）**→（Mayaは）pack生成→runtime SSDへのコピーを試行→サーバー起動→Codex起動を行う。
@@ -71,10 +72,10 @@ MyDrive/GLM53-data/
 `--reverify` を指定すれば全量検証を優先する。既定では同じサイズの内容変更は検出しないため、内容を検査するときは `--reverify` を使う。従来の更新日時比較を使う場合は `--no-skip-cache-mtime` を付ける。
 
 ```bash
-./colab-glm codex
-./colab-glm start
-./colab-glm prepare
-./colab-glm start --reverify # 全量SHA検証
+./llm colab glm codex
+./llm colab glm start
+./llm colab glm prepare
+./llm colab glm start --reverify # 全量SHA検証
 ```
 
 - `--repack` は無い。Mayaは `models/Maya-L/pack/native_experts.txt` が同じGGUFを指し、`index.txt`・`dense.bin`・tokenizerが揃っていればpackを作り直さない。
@@ -93,8 +94,8 @@ DriveFSの読取キャッシュは同じruntime SSDを使うが、容量の使�
 ## 準備だけまとめて行う
 
 ```bash
-./colab-glm prepare                  # 3変種すべて: 重み取得 + 2エンジンビルド + Mayaのpack
-./colab-glm prepare --variant full   # 1変種だけ。この場合のみ --context を指定できる
+./llm colab glm prepare                  # 3変種すべて: 重み取得 + 2エンジンビルド + Mayaのpack
+./llm colab glm prepare --variant full   # 1変種だけ。この場合のみ --context を指定できる
 ```
 
 サーバーもCodexも起動しない。runtime作成→GDriveマウント→変種ごとの空き容量確認→GGUF取得・SHA-256検証→エンジンビルド→（`flash` は）pack生成までを1runtimeで済ませ、完了後にGDriveを同期して停止する。
@@ -106,7 +107,7 @@ contextは各変種の既定値（`flash`／`flash-uncensored` は131072、`full
 ログが更新されず、進んでいるか分からない場合は、別ターミナルで確認する。
 
 ```bash
-./colab-glm progress
+./llm colab glm progress
 ```
 
 既存のSSH接続で準備プロセスと子プロセス、GGUFの読取／書込位置、直近のログを表示する。runtimeの作成や停止は行わない。
@@ -119,17 +120,17 @@ contextは各変種の既定値（`flash`／`flash-uncensored` は131072、`full
 
 ```bash
 # ターミナル1: 準備完了後も、このコマンドを起動したまま使う。
-./colab-glm start --variant full
+./llm colab glm start --variant full
 
 # ターミナル2: 上で起動したサーバーへCodexを接続する。
-./colab-glm client
+./llm colab glm client
 # または現在のCodex/スクリプトからAPIを呼び出す。
 curl http://127.0.0.1:8086/v1/responses \
   -H 'Content-Type: application/json' \
   -d '{"model":"glm-5.3-slim-e192","input":"日本語で一文だけ挨拶して","max_output_tokens":64,"reasoning":{"effort":"none"}}'
 
 # セッション終了。サーバー、トンネル、Colab runtimeを終了する。
-./colab-glm stop
+./llm colab glm stop
 # 緊急時は直接:
 colab stop -s glm53-a100
 ```
@@ -141,19 +142,19 @@ colab stop -s glm53-a100
 既存の `glm53-a100` があると新規起動は拒否する。
 
 ```bash
-./colab-glm doctor                    # ローカル依存とCodexカタログの確認。runtimeを作成しない。
-./colab-glm doctor --variant full     # 変種ごとの取得サイズとカタログを確認。
-./colab-glm status                    # runtimeとAPIの状態。
-./colab-glm progress                  # 準備中の読取位置・子プロセスを確認。新規runtimeなし。
-./colab-glm check-drive               # GDriveだけを確認し、成功・失敗どちらでもruntimeをstop。
-./colab-glm start --max-hours 2       # 初回準備を含む2時間の上限。
-./colab-glm codex --context 32768 --max-hours 3
+./llm colab glm doctor                    # ローカル依存とCodexカタログの確認。runtimeを作成しない。
+./llm colab glm doctor --variant full     # 変種ごとの取得サイズとカタログを確認。
+./llm colab glm status                    # runtimeとAPIの状態。
+./llm colab glm progress                  # 準備中の読取位置・子プロセスを確認。新規runtimeなし。
+./llm colab glm check-drive               # GDriveだけを確認し、成功・失敗どちらでもruntimeをstop。
+./llm colab glm start --max-hours 2       # 初回準備を含む2時間の上限。
+./llm colab glm codex --context 32768 --max-hours 3
 ```
 
 
-同期待ちの失敗でruntimeが残った場合は `./colab-glm stop` で再試行する。
+同期待ちの失敗でruntimeが残った場合は `./llm colab glm stop` で再試行する。
 DriveFSが完了前にマウントを外して終了した場合も、既存の認証・キャッシュで再マウントして同期を再試行する。マウントが外れただけでは同期済みと判定しない。
-同期確認を省いて解放する必要がある場合だけ `./colab-glm stop --force` を使う（未同期データを失う可能性がある）。
+同期確認を省いて解放する必要がある場合だけ `./llm colab glm stop --force` を使う（未同期データを失う可能性がある）。
 
 Drive認証後のruntime再接続・作業ディレクトリ準備は、1回最大120秒、ローカルCLIのタイムアウト時に最大3回まで接続を作り直して再試行する。
 ここでColab CLI自身の接続初期化が詰まる場合もある。再試行は再実行しても結果が変わらない準備セルに限定し、モデル起動やDrive同期のセルは自動で再実行しない。

@@ -12,17 +12,17 @@
 現在の作業領域には [公式 Linux x64 リリース 1.2.0](https://github.com/Aivis-Project/AivisSpeech-Engine/releases/tag/1.2.0) と、下記 2 モデルを導入済み。別環境で再現する場合は、公式リリースの `AivisSpeech-Engine-Linux-x64-1.2.0.7z.001` を `aivisspeech/` に取得して `uvx --from py7zr py7zr x <取得したファイル> /workspace/LLM/aivisspeech` で展開する。モデルは表の AivisHub 詳細ページから AIVMX を取得し、`aivisspeech/data/AivisSpeech-Engine/Models/` に配置する。
 
 ```bash
-cd /workspace/LLM/llm-chat
-uv run llm-chat                     # http://localhost:5070
+cd /workspace/LLM
+./llm chat                           # http://localhost:5070
 ```
 
-`uv run llm-chat` 起動時の読み上げはOFF。UIの「読み上げ」をONにした時だけ、導入済みのAivisSpeech・VOICEVOXをバックグラウンドで起動する。
+`./llm chat` 起動時の読み上げはOFF。UIの「読み上げ」をONにした時だけ、導入済みのAivisSpeech・VOICEVOXをバックグラウンドで起動する。
 OFFにすると再生・一覧の定期確認を止め、チャット自身が起動した両エンジンと子プロセスを終了してRAMを解放する。起動途中でもOFFにでき、再度ONにすると起動し直す。
 既定ポートは127.0.0.1:10101と127.0.0.1:50021、CPU実行。Aivis/VOICEVOXとIrodori CPU会話モードの切り替えではllama.cpp・Strataを再ロードしない。IrodoriのLarge GPU声作成・独立合成はLLMをアンロードする（[手順](08-irodori-tts.md#実装と使い方2026-10-07)）。チャットは音声の起動完了を待たずに利用できる。
 Ctrl+Cで終了すると、チャット自身が起動した音声エンジンと子プロセスも停止する。
 すでにポートが使用されている場合は新たに起動せず、既存サービスをOFF時・終了時にも停止しない。
 外部URLやパス付きプロキシURLを指定している場合、またはエンジンが未導入の場合は、自動起動の対象から外れる。
-管理処理は既存の `serve.sh` を実行する。エンジン本体とAIVMXの導入は引き続き別途行う。
+管理処理は `./llm voice` を経由して内部の `serve.sh` を実行する。エンジン本体とAIVMXの導入は引き続き別途行う。
 エンジン初回起動時のBERTデータ取得や、初回文字起こし時のSTTモデル取得は下記の従来動作を引き継ぐ。
 
 ON後の起動中は `/api/voice/voices` が一時的に503になることがある。画面はON中だけ10秒間隔で再確認し、起動後に自動復帰する。OFF中のAPIは空の一覧を返す。
@@ -33,9 +33,10 @@ ON後の起動中は `/api/voice/voices` が一時的に503になることがあ
 手動で管理する場合は、各エンジンを別ターミナルで先に起動し、UIの「読み上げ」をONにする。
 
 ```bash
-cd /workspace/LLM/aivisspeech && bash serve.sh
-cd /workspace/LLM/voicevox && bash serve.sh
-cd /workspace/LLM/llm-chat && uv run llm-chat
+cd /workspace/LLM
+./llm voice aivisspeech
+./llm voice voicevox
+./llm chat
 ```
 
 音声一覧は両エンジンへ並行して問い合わせ、各エンジンへの問い合わせ全体を5秒で打ち切る。
@@ -66,7 +67,7 @@ VOICEVOX は [公式 Engine 0.25.2 Linux CPU x64 リリース](https://github.co
 | 東北ずん子 | ノーマル |
 | 東北きりたん | ノーマル |
 
-VOICEVOX の合成モデルは公式 Engine 配布物に含まれる。`voicevox/serve.sh` で直接起動し、追加の Docker コンテナは不要。音声エンジン間のスタイル ID 衝突を避けるため、内部では `エンジン:話者名` とエンジン別のスタイル ID を使う。
+VOICEVOX の合成モデルは公式 Engine 配布物に含まれる。単体では `./llm voice voicevox` で起動し、追加の Docker コンテナは不要。音声エンジン間のスタイル ID 衝突を避けるため、内部では `エンジン:話者名` とエンジン別のスタイル ID を使う。
 
 5人の「ノーマル」で合成した試聴用 WAV を `voicevox/<話者名>-test.wav` に保存済み。
 

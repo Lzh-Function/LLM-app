@@ -202,7 +202,7 @@ exec ../llama.cpp/llama-server \
 ### 単体での利用例
 
 ```bash
-PORT=8080 /workspace/LLM/qwen3.6-35b-a3b/serve.sh
+PORT=8080 /workspace/LLM/llm model qwen3.6-35b-a3b
 curl -s localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"こんにちは"}],
        "chat_template_kwargs":{"enable_thinking":false}}' | jq -r '.choices[0].message.content'

@@ -61,7 +61,7 @@
         </div>
 
         <div id="models-view" hidden><div class="section-title"><h2>稼働中のモデル</h2><span class="small-text">すべての監視対象</span></div><div class="panel table-panel"><table><thead><tr><th>モデル / 接続先</th><th>ホスト</th><th>状態</th><th>生成 tok/s</th><th>Context</th></tr></thead><tbody id="running-models"></tbody></table></div><div class="section-title catalog-title"><h2>登録済みモデル</h2><span class="small-text">ローカルの model.toml</span></div><div class="catalog-grid" id="model-catalog"></div></div>
-        <div id="connections-view" hidden><div class="section-title"><h2>監視対象</h2><button class="secondary-button" id="add-connection-main">＋ API接続を追加</button></div><div class="connections-grid" id="connection-cards"></div><div class="connection-help panel"><h2>Colabへの接続</h2><p>いつもの起動コマンドで開いたSSH接続を自動的に見つけます。runtimeの起動・停止はターミナルから行えます。</p><div class="command-pair"><code>./colab-qwen codex</code><code>./colab-glm codex</code></div><p class="muted">監視を終了しても、モデルやColab runtimeは停止しません。</p></div></div>
+        <div id="connections-view" hidden><div class="section-title"><h2>監視対象</h2><button class="secondary-button" id="add-connection-main">＋ API接続を追加</button></div><div class="connections-grid" id="connection-cards"></div><div class="connection-help panel"><h2>Colabへの接続</h2><p>いつもの起動コマンドで開いたSSH接続を自動的に見つけます。runtimeの起動・停止はターミナルから行えます。</p><div class="command-pair"><code>./llm colab qwen codex</code><code>./llm colab glm codex</code></div><p class="muted">監視を終了しても、モデルやColab runtimeは停止しません。</p></div></div>
 
         <footer class="page-footer"><span><span class="status-dot"></span> <span id="footer-status">接続を確認中</span></span><span>LLM OBSERVATORY <span class="footer-divider">/</span> LOCAL + COLAB</span></footer>
       </div>

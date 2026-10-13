@@ -8,7 +8,7 @@
 cd /workspace/LLM
 uv run codex/setup.py
 # ターミナル1
-bash ternary-bonsai-2-27b-abliterated/serve-codex.sh
+./llm codex bonsai
 # ターミナル2: 作業するディレクトリで
 codex -p bonsai
 # 非インタラクティブ

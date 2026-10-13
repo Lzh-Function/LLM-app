@@ -1,5 +1,5 @@
 # Compatibility alias for flash-next; prefer codex -p flash-next.
-# Optional profile: codex -p flash-next. Start serve-codex.sh in another terminal first.
+# Optional profile: codex -p flash-next. Start ./llm codex flash-next in another terminal first.
 model = "qwen3.8-flash-next-sc117-abliterated-iq3_xxs"
 model_provider = "strata"
 model_catalog_json = "@CODEX_HOME@/flash-next-models.json"

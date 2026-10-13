@@ -31,7 +31,7 @@ WSL2 + Dev Container 上で、llama.cpp と Strata を使ってローカル LLM 
 ├── gemma4-26b-a4b/       MoE 26B/A4B  UD-Q4_K_XL (17.01GB)
 ├── qwen3.5-9b/           Dense 9B     UD-Q5_K_XL (6.74GB)
 │   ├── models/*.gguf     モデル本体
-│   ├── serve.sh          llama-server 起動スクリプト (単体でも使える)
+│   ├── serve.sh          ./llm model が呼ぶ内部起動スクリプト
 │   ├── model.toml        チャット UI 用メタデータ
 │   └── server.log        起動ログ (追記)
 └── llm-chat/             統合チャット UI (uv + FastAPI, :5070)
@@ -43,13 +43,15 @@ WSL2 + Dev Container 上で、llama.cpp と Strata を使ってローカル LLM 
 
 ```bash
 # チャット UI (ブラウザで http://localhost:5070)
-cd /workspace/LLM/llm-chat && uv run llm-chat
+cd /workspace/LLM && ./llm chat
 
 # Codex からローカル LLM を使う
-bash /workspace/LLM/codex/serve.sh flash-next  # ターミナル 1
+./llm codex flash-next                         # ターミナル 1
 codex -p flash-next                         # ターミナル 2（通常のcodexはGPT）
 # Qwen3.5-9Bはサーバー・プロファイルをともにqwen-9b、Bonsaiはbonsaiへ切り替える
 ```
+
+チャット、モデルAPI、音声、監視、Colabはすべてリポジトリ直下の [共通起動コマンド](../README.md#起動コマンド) から呼び出せる。従来の個別スクリプトも引き続き利用できる。
 
 > VRAM 12GB では **同時に 1 モデルしか載らない**。チャット UI と Codex 用サーバーは同時に使わないこと。
 

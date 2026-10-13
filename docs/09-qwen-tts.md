@@ -12,7 +12,7 @@ bash qwen-tts/setup.sh
 # Irodoriも使う場合
 bash irodori-tts/setup.sh
 # 制作画面
-bash voice-synthesize/serve.sh
+./llm studio
 ```
 
 `http://localhost:5080`で音声エンジンを「Qwen3-TTS 1.7B」にする。
@@ -139,7 +139,7 @@ qwen-tts/
 | `LLM_VOICE_LIBRARY_DIR` | `llm-chat/voice-library` | 共通の会話用声ライブラリ |
 
 通常は`voice-synthesize`から起動し、GPU排他とLLMアンロードを使う。
-`bash qwen-tts/serve.sh --port 8090`でもバックエンド単体を起動できるが、単体CLI自体はLLMアンロード・GPU予約を行わない。
+`./llm voice qwen --port 8090`でもバックエンド単体を起動できるが、単体CLI自体はLLMアンロード・GPU予約を行わない。
 管理外のローカルQwenが既に起動していれば、制作画面はGPU所有権を確認できないため起動を拒否する。
 
 ## 検証結果

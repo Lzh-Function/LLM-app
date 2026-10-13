@@ -242,7 +242,9 @@ class VoiceRuntime:
                     spawn = asyncio.create_task(
                         asyncio.create_subprocess_exec(
                             "bash",
-                            str(script),
+                            str(self.root / "llm"),
+                            "voice",
+                            "qwen",
                             "--host",
                             address[0],
                             "--port",
@@ -335,7 +337,9 @@ class VoiceRuntime:
                     spawn = asyncio.create_task(
                         asyncio.create_subprocess_exec(
                             "bash",
-                            str(script),
+                            str(self.root / "llm"),
+                            "voice",
+                            "irodori",
                             "--host",
                             address[0],
                             "--port",
@@ -437,7 +441,9 @@ class VoiceRuntime:
                 spawn = asyncio.create_task(
                     asyncio.create_subprocess_exec(
                         "bash",
-                        str(script),
+                        str(self.root / "llm"),
+                        "voice",
+                        "aivisspeech" if engine == "aivis" else engine,
                         "--host",
                         host,
                         "--port",

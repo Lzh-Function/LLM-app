@@ -7,8 +7,10 @@ LLMと共存させず、Irodori-TTS-v4-Large（約3.29B）またはQwen3-TTS 1.7
 cd /workspace/LLM
 bash irodori-tts/setup.sh
 bash qwen-tts/setup.sh  # Qwenを使う場合
-bash voice-synthesize/serve.sh
+./llm studio
 ```
+
+別の作業ディレクトリからは `/workspace/LLM/llm studio` と呼べる。
 
 `http://localhost:5080`の「音声作品を制作」で声の説明と原稿を入力して合成する。
 声ライブラリへの登録は不要。原稿はUTF-8のTXTからも取り込める。
@@ -44,7 +46,7 @@ llm-chatが停止していても利用可能。GPUを使う間はLLMの再ロー
 別の音声サービスから切り替えるときは先にそのGPU音声をOFFにする。
 終了・OFFでGPUを解放し、LLMは自動で再ロードしない。
 
-UIは5080、Irodoriバックエンドは8089、Qwenは8090。`serve.sh --host 127.0.0.1 --port 5080`で待受けを変更可能。
+UIは5080、Irodoriバックエンドは8089、Qwenは8090。`./llm studio --host 127.0.0.1 --port 5080`で待受けを変更可能。
 `LLM_CHAT_URL`、`VOICE_SYNTHESIZE_TTS_URL`、`VOICE_SYNTHESIZE_QWEN_URL`で接続先を変更できる。
 会話用の声は`llm-chat/voice-library/`、作品は`voice-synthesize/productions/<ID>/`へ保存する。
 

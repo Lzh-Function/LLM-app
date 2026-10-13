@@ -1,7 +1,7 @@
 # 04. Codex CLIとQwen3.8 Flash Next / Strata
 
 Codexの既定モデルは従来のGPT（この環境では`gpt-6.1-sol`）。
-Qwen3.5-9Bは`bash codex/serve.sh qwen-9b`と`codex -p qwen-9b`で使う。[設定・実測](12-codex-qwen-9b.md)を参照。
+Qwen3.5-9Bは`./llm codex qwen-9b`と`codex -p qwen-9b`で使う。[設定・実測](12-codex-qwen-9b.md)を参照。
 セットアップはBonsai用の`codex -p bonsai`も導入する。Bonsaiの96K設定と実測は[11-codex-bonsai.md](11-codex-bonsai.md)を参照。
 `codex -p flash-next`を指定したときだけ、導入済みのSC117版Qwen3.8-Flash-Next GSQ-RCO abliterated IQ3_XXSを利用する。
 Strataの`/v1/responses`を使い、ファイル編集・シェル実行・ツール結果を返して続けるエージェント操作に対応する。
@@ -16,7 +16,7 @@ Codex CLI 0.159.2、Strataエンジン0.1.40で確認した。モデル重みの
 cd /workspace/LLM
 uv run codex/setup.py
 # ターミナル1: Codex用のローカルサーバー
-bash codex/serve.sh flash-next
+./llm codex flash-next
 # ターミナル2: 作業ディレクトリでQwenを指定
 cd /path/to/project
 codex -p flash-next
@@ -95,7 +95,7 @@ MCPやプラグイン、プロジェクトのAGENTS.md・スキルの設定は�
 
 ## 3. GPUとサーバー
 
-`serve-codex.sh`は既定で`127.0.0.1:8080`に起動し、次を行う。
+`./llm codex flash-next`は既定で`127.0.0.1:8080`に起動し、内部の`serve-codex.sh`を通じて次を行う。
 
 1. ポートが未使用か確認。
 2. 起動中のllm-chatへLLMアンロードを要求。llm-chatが停止中ならそのまま進む。
@@ -105,7 +105,7 @@ MCPやプラグイン、プロジェクトのAGENTS.md・スキルの設定は�
 GPU音声がONの間は起動を拒否する。Codexサーバー稼働中はllm-chatのLLMやGPU音声の起動もブロックする。
 チャット用の`serve.sh`は5071、Codex用は8080。同じGPUに二つのLLMを同時にロードしない。
 停止は起動ターミナルでCtrl+C。Strataがエンジンを終了してからGPU予約を解放する。
-既定ポートを変える場合は`serve-codex.sh --port <番号>`とCodexの`base_url`の両方を揃える。
+既定ポートを変える場合は`./llm codex flash-next --port <番号>`とCodexの`base_url`の両方を揃える。
 
 ログは`qwen3.8-flash-next/server-codex.log`（サーバー）と`strata/strata-codex-sc117-iq3_xxs.log`（エンジン）。
 起動時のターミナル出力も`server-codex.log`へ追記する。Codex用は`STRATA_DEBUG=1`で、API形式への変換前の生成テキストも記録する。
@@ -120,7 +120,7 @@ nvidia-smi --query-gpu=memory.used --format=csv,noheader
 
 ### 入力・思考・応答の確認
 
-`serve-codex.sh`はStrataのAPI監視画面を有効にする。サーバー起動後に
+`./llm codex flash-next`はStrataのAPI監視画面を有効にする。サーバー起動後に
 `http://127.0.0.1:8080/api-monitor`を開き、リクエストを選んでInput・Reasoning・Output・Responseを確認する。
 ポートを変更した場合はそのポートへアクセスする。画面は2秒ごとに更新し、直近100件をメモリに保持する。
 各欄262144文字までで、サーバーを停止すると画面の履歴は消える。
@@ -218,6 +218,6 @@ GPTへの復帰後も`codex -p flash-next`から同じ操作が通った。プ�
 
 ### Flash Next起動名の確認（2026-10-11）
 
-`bash codex/serve.sh flash-next`と`codex -p flash-next`で実モデルを起動し、検索MCPと公式ページ本文取得を確認した。
+`./llm codex flash-next`と`codex -p flash-next`で実モデルを起動し、検索MCPと公式ページ本文取得を確認した。
 旧`qwen`は同じFlash Nextモデルの互換プロファイルとして維持する。Qwen3.5-9Bは別の`qwen-9b`プロファイルと8083/8084を使う。
 結果は`/tmp/codex-flash-next-renamed/`。検証後はサーバー・エンジンを停止し、8080の閉鎖とGPUロック解放を確認した。

@@ -6,15 +6,16 @@ Qwen3.8-Flash-Next GSQ-RCO **IQ3_S**を、ColabのA100 high-memで実行する�
 起動時は選択した変種のGGUF・MTP・packをColabの一時SSD `/content/strata-qwen/model-data/` へコピーし、StrataはSSD側から読み出す。ローカルPCへモデルはコピーしない。
 SSHでAPIをローカルの `127.0.0.1:8085` へ転送する。Strata側は専用の `127.0.0.1:18080` のみで待ち受ける。
 ColabのJupyterが使う8080番との競合を避け、ビルド・取得より前にポートの空きを確認する。
+起動・停止・診断はリポジトリ直下の `./llm colab qwen ...` を使う。
 
 ## 通常版と無検閲版の選択
 
 既定は通常版。無検閲版は `--variant uncensored` を付ける。
 
 ```bash
-./colab-qwen codex                      # 通常版（既定）
-./colab-qwen codex --variant uncensored # 無検閲版
-./colab-qwen start --variant uncensored
+./llm colab qwen codex                      # 通常版（既定）
+./llm colab qwen codex --variant uncensored # 無検閲版
+./llm colab qwen start --variant uncensored
 ```
 
 無検閲版は [SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF](https://huggingface.co/SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF) のIQ3_Sを使う。
@@ -41,23 +42,23 @@ Driveマウント時に表示されるブラウザ認証では、**表示され�
 
 ```bash
 cd /workspace/LLM
-./colab-qwen codex
+./llm colab qwen codex
 ```
 
 この1コマンドがruntime作成→GDriveマウント・認証→初回ビルド→必要なダウンロード→SSDへのコピー・必要なSHA-256検証→packのコピーまたは作成→Strata起動→Codex起動を行う。
 `--variant` を付けなければ通常版で、変種ごとに初回ダウンロードとpack生成が行われる。既に取得済みの変種は再取得しない。
-初回準備の待機上限は3時間、runtime全体の上限は4時間。必要なら `./colab-qwen codex --startup-minutes 300 --max-hours 6` で、準備待ち5時間・runtime全体6時間に変更できる。
+初回準備の待機上限は3時間、runtime全体の上限は4時間。必要なら `./llm colab qwen codex --startup-minutes 300 --max-hours 6` で、準備待ち5時間・runtime全体6時間に変更できる。
 Strata内部のREADY待ちも `--startup-minutes` と同じ秒数を起動前の環境変数 `STRATA_ENGINE_READY_S` へ渡す。サーバー既定の900秒で、Driveからの読込やGPUキャッシュ充填途中に終了しないようにする。外側の準備待ち・runtime時間上限も引き続き適用する。
 **Codexを終了するとSSH接続とモデルを終了し、GDriveの同期完了を待ってから `colab stop -s strata-qwen` を実行する。**
-同期待ちはColab標準と同じ最大24時間。同期が終われば直ちに停止する。同期失敗時はruntimeを残し、`./colab-qwen stop` で再試行する。
+同期待ちはColab標準と同じ最大24時間。同期が終われば直ちに停止する。同期失敗時はruntimeを残し、`./llm colab qwen stop` で再試行する。
 同期完了を確認できない場合も時間上限でruntimeをstopし、未同期データは次回再取得が必要になり得ることを表示して失敗終了する。
 Codexは起動したときの作業ディレクトリを使う。別プロジェクトの場合は絶対パスで呼ぶ。
 
 ```bash
 cd /path/to/project
-/workspace/LLM/colab-qwen codex
+/workspace/LLM/llm colab qwen codex
 # 非対話タスクも実行可能。GDrive認証が必要なときは人のターミナルで実行する。
-/workspace/LLM/colab-qwen codex -- exec 'READMEを読んで構成を説明して'
+/workspace/LLM/llm colab qwen codex -- exec 'READMEを読んで構成を説明して'
 ```
 
 初回準備は時間がかかる。クラウド同期済みの `.gguf.part` はDriveに残り、次回は続きを取得する。
@@ -75,9 +76,9 @@ packが未作成ならSSD上のGGUFからSSD上に生成し、完成品をDrive�
 `--reverify` を指定すれば全量検証を優先する。既定では同じサイズの内容変更は検出しないため、内容を検査するときは `--reverify` を使う。従来の更新日時比較を使う場合は `--no-skip-cache-mtime` を付ける。
 
 ```bash
-./colab-qwen codex --variant uncensored
-./colab-qwen start
-./colab-qwen start --reverify # 全量SHA検証
+./llm colab qwen codex --variant uncensored
+./llm colab qwen start
+./llm colab qwen start --reverify # 全量SHA検証
 ```
 
 
@@ -85,23 +86,23 @@ packが未作成ならSSD上のGGUFからSSD上に生成し、完成品をDrive�
 
 ```bash
 # ターミナル1: 準備完了後も、このコマンドを起動したまま使う。
-./colab-qwen start
+./llm colab qwen start
 
 # ターミナル2: 上で起動したStrataへCodexを接続する。
-./colab-qwen client
+./llm colab qwen client
 # または現在のCodex/スクリプトからAPIを呼び出す。
 curl http://127.0.0.1:8085/v1/responses \
   -H 'Content-Type: application/json' \
   -d '{"model":"qwen3.8-flash-next-iq3_s","input":"日本語で一文だけ挨拶して","max_output_tokens":64,"reasoning":{"effort":"none"}}'
 
 # セッション終了。Strata、トンネル、Colab runtimeを終了する。
-./colab-qwen stop
+./llm colab qwen stop
 # 緊急時は直接:
 colab stop -s strata-qwen
 ```
 
 無検閲版で起動したruntimeへ同じcurlを使う場合は、`model` を `qwen3.8-flash-next-iq3_s-uncensored` に変える。
-`./colab-qwen client` は起動中の変種をAPI応答から判定して、対応するCodexモデルを接続する。
+`./llm colab qwen client` は起動中の変種をAPI応答から判定して、対応するCodexモデルを接続する。
 `start`のターミナルでCtrl+Cを押しても、GDrive同期待ちを経てruntimeをstopする。
 `client`の終了だけでは共有runtimeを止めないため、最後に `stop` する。
 `codex`モードではCodexが終了したときに自動でstopする。
@@ -110,12 +111,12 @@ colab stop -s strata-qwen
 既存の `strata-qwen` があると、新規起動は拒否する。必要なら先に `stop` する。
 
 ```bash
-./colab-qwen doctor   # ローカル依存とCodexカタログの確認。runtimeを作成しない。
-./colab-qwen status   # runtimeとAPIの状態。
-./colab-qwen doctor --variant uncensored  # 無検閲版の取得サイズとカタログを確認。
-./colab-qwen check-drive  # GDriveだけを確認し、成功・失敗どちらでもruntimeをstop。
-./colab-qwen start --max-hours 2  # 初回準備を含む2時間の上限。
-./colab-qwen codex --context 65536 --max-hours 3
+./llm colab qwen doctor   # ローカル依存とCodexカタログの確認。runtimeを作成しない。
+./llm colab qwen status   # runtimeとAPIの状態。
+./llm colab qwen doctor --variant uncensored  # 無検閲版の取得サイズとカタログを確認。
+./llm colab qwen check-drive  # GDriveだけを確認し、成功・失敗どちらでもruntimeをstop。
+./llm colab qwen start --max-hours 2  # 初回準備を含む2時間の上限。
+./llm colab qwen codex --context 65536 --max-hours 3
 ```
 
 既定は準備待ち最大180分、準備・利用の最大4時間。終了処理の同期待ちはこの上限とは別枠で、Colabの `flush_and_unmount()` と同じ最大24時間（`--flush-minutes`）。24時間必ず待つわけではなく、同期が終われば直ちに停止する。同期待ち中はA100の利用時間を消費する。上限やエラーで同期を確認できなければruntimeを残す。
@@ -125,9 +126,9 @@ colab stop -s strata-qwen
 停止したVMの一時キャッシュからは回収できない。緊急時の直接の `colab stop` はruntime解放を優先する。
 
 
-同期待ちの失敗でruntimeが残った場合は `./colab-qwen stop` で再試行する。
+同期待ちの失敗でruntimeが残った場合は `./llm colab qwen stop` で再試行する。
 DriveFSが完了前にマウントを外して終了した場合も、既存の認証・キャッシュで再マウントして同期を再試行する。マウントが外れただけでは同期済みと判定しない。
-同期確認を省いて解放する必要がある場合だけ `./colab-qwen stop --force` を使う（未同期データを失う可能性がある）。
+同期確認を省いて解放する必要がある場合だけ `./llm colab qwen stop --force` を使う（未同期データを失う可能性がある）。
 
 IQ packの再利用は `.complete.json` のモデル識別子と `dense.bin`・`index.txt`・`native_experts.txt`・tokenizerで確認する。別のMTP pack用の `dense.txt` は要求しない。
 起動待ち中はbootstrapとRAM上の推論診断から追加行だけをSSH経由でローカルへ表示する。以前の末尾を繰り返し表示せず、RAMの出力をColabのbootstrap.logへコピーしない。
@@ -220,7 +221,7 @@ runtime内にGGUFと検証JSONがあっても、クラウドへの送信がま�
 CLI経由の認証が繰り返し失敗する場合、まず自分のターミナルで次を実行する。
 
 ```bash
-./colab-qwen check-drive --drive-auth browser
+./llm colab qwen check-drive --drive-auth browser
 ```
 
 表示されたURLを開くと、CLIで作成した既存のruntimeに接続するColab画面を開ける。
@@ -233,10 +234,10 @@ drive.mount('/content/drive')
 
 マウント成功後、ターミナルに戻ってEnterを押す。ブラウザ操作待ちは最大5分、マウント確認は最大20秒。
 指定のA100 runtimeを作成してマウントだけを確認し、モデル取得やビルドはせず、最後にruntimeをstopする。
-成功したら `./colab-qwen codex --drive-auth browser` で、同じ認証方法を使って本起動できる。
+成功したら `./llm colab qwen codex --drive-auth browser` で、同じ認証方法を使って本起動できる。
 `check-drive` が停止したruntimeを本起動で引き継ぐことはできず、本起動時には新しいruntimeで再度マウントする。
 
-既定のCLI認証は `./colab-qwen check-drive`。インストール済みCLIの認証処理を使い、補助スクリプトで `exec` と同じカーネルに接続する。
+既定のCLI認証は `./llm colab qwen check-drive`。インストール済みCLIの認証処理を使い、補助スクリプトで `exec` と同じカーネルに接続する。
 失敗時の診断は、マウントと同じセルの中で取得し、停止前に `.runtime/drive-mount-error.json` へ保存する。
 このファイルにはマウント状態、DriveFSログの有無・サイズ、認証・権限・接続・クラッシュなど既知のエラーの検出数を記録し、ログ原文や認証情報は保存しない。
 CLIのマウント失敗後は別の `exec` で診断を取り直さない。CLI全体にも5分の時間制限を設け、応答しない場合はプロセスを終了してruntime停止へ進む。

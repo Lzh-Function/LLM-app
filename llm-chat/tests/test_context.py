@@ -3,6 +3,7 @@
 import asyncio
 import importlib.util
 import json
+import shutil
 import shlex
 import sys
 import tempfile
@@ -19,6 +20,11 @@ class ContextTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        shutil.copy2(Path(__file__).resolve().parents[2] / "llm", self.root / "llm")
+        for name in ("wide", "small"):
+            directory = self.root / name
+            directory.mkdir()
+            (directory / "model.toml").write_text(f'id = "{name}"\n')
         with patch.object(server, "LLM_ROOT", self.root):
             self.manager = server.ModelManager()
         self.manager.models = {
@@ -27,7 +33,7 @@ class ContextTest(unittest.IsolatedAsyncioTestCase):
                 "Wide",
                 "",
                 1,
-                self.root,
+                self.root / "wide",
                 default_context_length=131072,
                 max_context_length=262144,
             ),
@@ -36,27 +42,30 @@ class ContextTest(unittest.IsolatedAsyncioTestCase):
                 "Small",
                 "",
                 2,
-                self.root,
+                self.root / "small",
                 default_context_length=32768,
                 max_context_length=131072,
             ),
         }
-        script = self.root / "serve.sh"
-        script.write_text(
+        script = (
             "exec "
             + shlex.quote(sys.executable)
             + " -c 'import json,os,time; print(json.dumps({k:os.environ[k] for k in "
             + '["CTX_SIZE","LLAMA_ARG_N_PARALLEL"]}),flush=True); time.sleep(60)'
             + "'\n"
         )
+        for name in ("wide", "small"):
+            (self.root / name / "serve.sh").write_text(script)
         self.children = []
+        launches = {}
 
         async def healthy(proc):
             self.children.append(proc)
+            active = self.manager.active
+            launches[active] = launches.get(active, 0) + 1
+            log = self.manager.models[active].log_path
             async with asyncio.timeout(3):
-                while (self.root / "server.log").read_text().count('"CTX_SIZE"') < len(
-                    self.children
-                ):
+                while log.read_text().count('"CTX_SIZE"') < launches[active]:
                     await asyncio.sleep(0.01)
             return True
 
@@ -86,11 +95,11 @@ class ContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.context_length, 262144)
         async with asyncio.timeout(3):
             while (
-                not self.root.joinpath("server.log").read_text().count('"CTX_SIZE"')
+                not self.root.joinpath("wide/server.log").read_text().count('"CTX_SIZE"')
                 >= 2
             ):
                 await asyncio.sleep(0.01)
-        text = (self.root / "server.log").read_text()
+        text = (self.root / "wide/server.log").read_text()
         self.assertIn('"CTX_SIZE": "131072"', text)
         self.assertIn('"CTX_SIZE": "262144"', text)
         self.assertIn('"LLAMA_ARG_N_PARALLEL": "1"', text)

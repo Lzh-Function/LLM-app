@@ -65,7 +65,7 @@ def main(settings):
         previous_handler = signal.signal(signal.SIGTERM, interrupted)
         with (directory / "codex-engine.log").open("a") as log:
             try:
-                command = ["bash", str(directory / "serve.sh"), "--port", str(args.backend_port),
+                command = ["bash", str(ROOT / "llm"), "model", directory.name, "--port", str(args.backend_port),
                            "--ctx-size", str(args.context), "--gpu-layers", settings["gpu_layers"],
                            "--fit", settings["fit"], "--cache-type-k", settings["cache_type"],
                            "--cache-type-v", settings["cache_type"], "--reasoning-preserve",

@@ -3,6 +3,7 @@
 import asyncio
 import errno
 import json
+import shutil
 import shlex
 import sys
 import tempfile
@@ -45,6 +46,7 @@ class ModelFailureTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        shutil.copy2(Path(__file__).resolve().parents[2] / "llm", self.root / "llm")
         self.patches = [
             patch.object(server, "LLM_ROOT", self.root),
             patch.object(server, "STOP_TIMEOUT_S", 0.15),
@@ -57,6 +59,7 @@ class ModelFailureTest(unittest.IsolatedAsyncioTestCase):
         for name in ("wide", "other"):
             directory = self.root / name
             directory.mkdir()
+            (directory / "model.toml").write_text(f'id = "{name}"\n')
             (directory / "backend.py").write_text(BACKEND)
             (directory / "serve.sh").write_text(
                 "exec " + shlex.quote(sys.executable) + " backend.py\n"

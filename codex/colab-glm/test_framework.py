@@ -1166,7 +1166,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(command[-2:], ['exec', 'test'])
 
     def test_launcher_runs_this_session_module(self):
-        launcher = session.HERE.parents[1] / 'colab-glm'
+        launcher = session.HERE.parents[1] / 'llm'
         self.assertTrue(launcher.is_file() and launcher.stat().st_mode & 0o111)
         self.assertIn('codex/colab-glm/session.py', launcher.read_text())
 

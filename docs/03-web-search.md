@@ -102,7 +102,7 @@ src/llm_chat/
 | `LLM_FETCH_MAX_CHARS` | `5000` | ページ本文の最大文字数 (ctx 32k を圧迫しないため) |
 | `LLM_SEARCH_THINKING_BUDGET` | `2048` | 1 ラウンドの思考トークン上限 |
 
-例: `LLM_SEARCH_MAX_RESULTS=8 uv run llm-chat`
+例: `LLM_SEARCH_MAX_RESULTS=8 /workspace/LLM/llm chat`
 
 ## 5. API プロバイダへの移行
 
@@ -134,7 +134,7 @@ PROVIDERS["tavily"] = TavilyProvider
 ```
 
 ```bash
-TAVILY_API_KEY=... LLM_SEARCH_PROVIDER=tavily uv run llm-chat
+TAVILY_API_KEY=... LLM_SEARCH_PROVIDER=tavily /workspace/LLM/llm chat
 ```
 
 (上記は設計例で未検証。実際の API 仕様は各サービスのドキュメントで確認すること)

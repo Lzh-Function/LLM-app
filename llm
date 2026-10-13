@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# The sole operator entry point; model and speech scripts remain internal backends.
+set -euo pipefail
+
+LLM_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+    cat <<'USAGE'
+Usage: ./llm <service> [arguments]
+
+  chat [args]                 Chat UI (:5070)
+  studio [args]               Voice production UI (:5080)
+  dashboard [args]            Resource dashboard (:5090)
+  model [model-id] [args]    List models or start a local model API (:5071)
+  codex <profile> [args]     Local Codex model API
+  colab <qwen|glm> [args]    Colab runtime and Codex client
+  voice <engine> [args]      aivisspeech, voicevox, irodori, qwen
+
+Run ./llm model to list configured local models. A model directory needs
+both model.toml and serve.sh; installed weights are checked at startup.
+Start services through this command; backend scripts are internal.
+USAGE
+}
+
+fail() {
+    printf '%s\n' "$1" >&2
+    usage >&2
+    exit 2
+}
+
+list_models() {
+    local model_dir model found=0
+    printf 'Configured local models:\n'
+    for model_dir in "$LLM_ROOT"/*; do
+        [[ -d "$model_dir" && -f "$model_dir/model.toml" && -f "$model_dir/serve.sh" ]] || continue
+        model="${model_dir##*/}"
+        [[ "$model" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ && "$model" != *..* ]] || continue
+        printf '  %s\n' "$model"
+        found=1
+    done
+    if [[ "$found" -eq 0 ]]; then
+        printf '  (none)\n'
+    fi
+    printf '\nStart one with: ./llm model <model-id>\n'
+}
+
+service="${1:-help}"
+if [[ $# -gt 0 ]]; then shift; fi
+case "$service" in
+    help|-h|--help)
+        usage
+        ;;
+    chat)
+        cd "$LLM_ROOT/llm-chat"
+        exec uv run llm-chat "$@"
+        ;;
+    studio)
+        cd "$LLM_ROOT/llm-chat"
+        exec uv run voice-synthesize "$@"
+        ;;
+    dashboard)
+        cd "$LLM_ROOT"
+        exec python3 -B "$LLM_ROOT/resource-dashboard/server.py" "$@"
+        ;;
+    model)
+        model="${1:-}"
+        if [[ -z "$model" && $# -eq 0 ]]; then
+            list_models
+            exit 0
+        fi
+        [[ "$model" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ && "$model" != *..* ]] || fail 'Specify a model directory name.'
+        shift
+        [[ -f "$LLM_ROOT/$model/model.toml" && -f "$LLM_ROOT/$model/serve.sh" ]] || fail "Unknown model: $model"
+        exec bash "$LLM_ROOT/$model/serve.sh" "$@"
+        ;;
+    codex)
+        profile="${1:-}"
+        [[ $# -gt 0 ]] && shift
+        case "$profile" in
+            flash-next|qwen) exec bash "$LLM_ROOT/qwen3.8-flash-next/serve-codex.sh" "$@" ;;
+            qwen-9b) exec bash "$LLM_ROOT/qwen3.5-9b/serve-codex.sh" "$@" ;;
+            bonsai) exec bash "$LLM_ROOT/ternary-bonsai-2-27b-abliterated/serve-codex.sh" "$@" ;;
+            *) fail 'Choose codex flash-next, qwen-9b, or bonsai.' ;;
+        esac
+        ;;
+    colab)
+        provider="${1:-}"
+        [[ $# -gt 0 ]] && shift
+        case "$provider" in
+            qwen) exec python3 "$LLM_ROOT/codex/colab-qwen/session.py" "$@" ;;
+            glm) exec python3 "$LLM_ROOT/codex/colab-glm/session.py" "$@" ;;
+            *) fail 'Choose colab qwen or colab glm.' ;;
+        esac
+        ;;
+    voice)
+        engine="${1:-}"
+        [[ $# -gt 0 ]] && shift
+        case "$engine" in
+            aivisspeech|voicevox|irodori|qwen)
+                directory="$engine"
+                case "$engine" in
+                    irodori|qwen) directory="$engine-tts" ;;
+                esac
+                exec bash "$LLM_ROOT/$directory/serve.sh" "$@"
+                ;;
+            *) fail 'Choose voice aivisspeech, voicevox, irodori, or qwen.' ;;
+        esac
+        ;;
+    *) fail "Unknown service: $service" ;;
+esac

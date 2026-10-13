@@ -1,4 +1,4 @@
-# Optional profile: codex -p bonsai. Start serve-codex.sh in another terminal first.
+# Optional profile: codex -p bonsai. Start ./llm codex bonsai in another terminal first.
 model = "ternary-bonsai-2-27b-abliterated"
 model_provider = "prism"
 model_catalog_json = "@CODEX_HOME@/bonsai-models.json"

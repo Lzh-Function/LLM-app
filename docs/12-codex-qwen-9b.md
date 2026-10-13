@@ -8,7 +8,7 @@ Qwen3.5-9Bは`qwen-9b`、Qwen3.8-Flash-Nextは`flash-next`で指定する。
 ```bash
 cd /workspace/LLM
 uv run codex/setup.py
-bash codex/serve.sh qwen-9b
+./llm codex qwen-9b
 # 別のターミナルで、作業ディレクトリから:
 codex -p qwen-9b
 ```
@@ -16,12 +16,12 @@ codex -p qwen-9b
 Flash Nextへの切り替えは、サーバーをCtrl+Cで停止してから次を実行する。
 
 ```bash
-bash codex/serve.sh flash-next
+./llm codex flash-next
 # 別のターミナルで:
 codex -p flash-next
 ```
 
-モデルのディレクトリにある`serve-codex.sh`も引き続き使える。
+モデルのディレクトリにある`serve-codex.sh`は`./llm codex`から呼ぶ内部スクリプト。
 セットアップはモデルごとの専用カタログとプロファイルを作成し、GPTの既定設定を維持する。
 旧`qwen`のプロジェクト信頼設定・手動追加MCPは、`flash-next`への初回移行時に引き継ぐ。
 
@@ -120,7 +120,7 @@ bash /workspace/LLM/qwen3.5-9b/watch-codex.sh
 `qwen3.5-9b/codex-traces/20261011T131733.542671Z-68911/`。
 検証後はAPI・バックエンドの8083/8084を停止し、エンジン終了とGPUロック解放を確認した。
 
-新しい`bash codex/serve.sh flash-next`と`codex -p flash-next`も実モデルで確認し、検索1回・ページ本文取得2回が成功した。
+新しい`./llm codex flash-next`と`codex -p flash-next`も実モデルで確認し、検索1回・ページ本文取得2回が成功した。
 初回の検索は結果なしで失敗したが、モデル自身が別のクエリで再検索して成功した。
 結果は`/tmp/codex-flash-next-renamed/report.json`。
 終了後は8080も閉じ、Strataプロセス終了・GPUロック解放を確認した。

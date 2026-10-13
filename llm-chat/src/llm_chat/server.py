@@ -2,7 +2,7 @@
 
 LLM_ROOT (既定: このアプリの親ディレクトリ /workspace/LLM) 直下の
 model.toml を持つディレクトリを LLM として検出し、
-選択されたモデルの serve.sh (llama-server / Strata) を内部ポートで1つだけ起動する。
+選択されたモデルを ./llm model 経由で内部ポートに1つだけ起動する。
 VRAM 12GB では複数モデルの同時常駐はできないため、切り替え時は
 旧プロセスを停止してから新しいモデルを起動する。
 """
@@ -273,7 +273,9 @@ class ModelManager:
                 self._log_path, self._log_offset = m.log_path, log.tell()
                 spawn = asyncio.create_task(asyncio.create_subprocess_exec(
                     "bash",
-                    str(m.dir / "serve.sh"),
+                    str(m.dir.parent / "llm"),
+                    "model",
+                    m.dir.name,
                     cwd=m.dir,
                     env=env,
                     stdout=log,

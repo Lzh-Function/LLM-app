@@ -1,4 +1,4 @@
-# Optional profile: codex -p qwen-9b. Start serve-codex.sh in another terminal first.
+# Optional profile: codex -p qwen-9b. Start ./llm codex qwen-9b in another terminal first.
 model = "qwen3.5-9b"
 model_provider = "llamacpp"
 model_catalog_json = "@CODEX_HOME@/qwen-9b-models.json"

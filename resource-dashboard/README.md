@@ -1,19 +1,19 @@
 # LLM Observatory — ローカル・Colabのリソース監視
 
-ローカルのLinux / WSL2と、`colab-qwen` / `colab-glm` で起動したruntimeを、一つのブラウザ画面で監視する。
+ローカルのLinux / WSL2と、`./llm colab qwen` / `./llm colab glm` で起動したruntimeを、一つのブラウザ画面で監視する。
 Python 3.11以上の標準ライブラリだけで起動でき、追加のPython・Node依存のインストールは不要。
 
 ```bash
 cd /workspace/LLM
-./llm-dashboard
+./llm dashboard
 ```
 
 **[http://localhost:5090](http://localhost:5090)** を開く。Dev ContainerではVS Codeの「ポート」から5090を転送する。
-別ディレクトリから `/workspace/LLM/llm-dashboard` と呼んでも使える。
+別ディレクトリからは `/workspace/LLM/llm dashboard` と呼べる。
 
 ```bash
-./llm-dashboard --port 5091       # ポートを変更
-./llm-dashboard --interval 5      # 計測間隔を5秒に変更（既定2秒）
+./llm dashboard --port 5091       # ポートを変更
+./llm dashboard --interval 5      # 計測間隔を5秒に変更（既定2秒）
 ```
 
 ## 表示できる情報
@@ -31,7 +31,7 @@ CPU・ディスクI/O・ネットワーク速度は前回との差分から計�
 CPU使用率はOSから見える論理CPU全体が分母。コンテナ割当は別途表示する。
 RAM使用量は `MemTotal - MemAvailable`。再利用・回収可能なファイルキャッシュを全量使用中のRAMとして扱わない。
 WSL2 / Containerでは、そのLinux環境から見えるCPU・RAM・ディスクの値を表示する。Windows全体のセンサー監視ではない。
-Drive容量はDriveFSの報告値を表示し、runtime SSD容量と区別する。
+Drive欄の容量はDriveFSが返す値で、Google Driveのクラウド保存枠ではない。runtime SSDと同じ一時ディスクを反映し得るため、両者の空き容量は足し算しない。
 
 ## 接続方法
 
@@ -42,7 +42,7 @@ Drive容量はDriveFSの報告値を表示し、runtime SSD容量と区別する
 追加したAPIのハードウェア情報は、このダッシュボードを実行しているローカルマシンのもの。
 APIは `http://127.0.0.1:PORT` / `http://localhost:PORT` / `http://[::1]:PORT` を指定できる。
 
-**Colab**：いつもの `./colab-qwen codex` / `./colab-glm codex` / `start` を起動しておけば、既存SSH ControlMasterソケットとAPI転送ポートを自動検出する。
+**Colab**：いつもの `./llm colab qwen codex` / `./llm colab glm codex` / `start` を起動しておけば、既存SSH ControlMasterソケットとAPI転送ポートを自動検出する。
 監視用に新しいColab sessionを作らず、認証・Driveマウント・モデルの再起動も行わない。
 SSHを開いているこのワークスペースと同じマシン・ユーザーからダッシュボードを起動する。
 接続が切れたら最終取得時刻と未接続状態を明示し、古い値をライブの値として扱わない。

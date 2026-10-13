@@ -11,7 +11,7 @@ WSL2 + Dev Container 上で、llama.cpp・Prism ML・Strata を使って LLM を
 > **このリポジトリの範囲**
 >
 > ソースコードと設定・手順書を管理しています。モデルの重み、推論エンジン本体、音声データは別途取得します。
-> 以下は 2026-10-09 時点の構成です。
+> 以下は 2026-10-13 時点の構成です。
 
 ## できること
 
@@ -23,6 +23,23 @@ WSL2 + Dev Container 上で、llama.cpp・Prism ML・Strata を使って LLM を
 | **音声作品制作** · `localhost:5080` | 声の説明や参照 WAV から長文合成、複数話者の原稿、作品の保存・再制作・ZIP 出力 | [voice-synthesize](voice-synthesize/README.md) |
 | **ローカル Codex** · ターミナル | Flash Next / Qwen3.5-9B / Bonsai 2 を専用プロファイルで利用、検索 MCP と入出力の全文記録 | [Codex 連携](codex/README.md) |
 | **リソース監視** · `localhost:5090` | ローカル・ColabのCPU / GPU / RAM / VRAM / ディスク / 温度と、モデル情報・トークン速度を一覧表示 | [LLM Observatory](resource-dashboard/README.md) |
+
+## 起動コマンド
+
+サーバーとColab runtimeの起動入口はリポジトリ直下の `./llm` に統一した。別の作業ディレクトリからは `/workspace/LLM/llm` と呼べる。モデル・音声エンジンの `serve.sh` は内部の実行本体として残し、`./llm` が引数・環境変数・終了コードを引き継ぐ。
+
+| 用途 | コマンド |
+| --- | --- |
+| チャットUI | `./llm chat` |
+| 音声作品UI | `./llm studio` |
+| リソース監視 | `./llm dashboard` |
+| 起動設定のあるローカルモデル一覧 | `./llm model` |
+| チャット用モデルAPI | `./llm model qwen3.5-9b`、`./llm model gemma4-26b-a4b`、`./llm model ternary-bonsai-2-27b-abliterated`、`./llm model qwen3.8-flash-next` |
+| ローカルCodex用API | `./llm codex flash-next`、`./llm codex qwen-9b`、`./llm codex bonsai` |
+| Colab | `./llm colab qwen codex`、`./llm colab glm codex --variant full` |
+| 音声バックエンド単体 | `./llm voice aivisspeech`、`./llm voice voicevox`、`./llm voice irodori`、`./llm voice qwen` |
+
+`./llm --help` でコマンド一覧、`./llm model` で起動設定のあるローカルモデル一覧を表示する。モデルの重みや依存環境の準備状況は起動時に確認される。Colabの`start`・`stop`・`prepare`などは、`./llm colab qwen ...` / `./llm colab glm ...` の末尾に従来どおり渡せる。
 
 ## 使い始める
 
@@ -49,8 +66,8 @@ Flash Next の `setup.sh` は既存の Strata・MTP・画像モデルがある�
 導入済みの環境では、次のコマンドで起動できます。以下の例は `/workspace/LLM` に配置した場合です。
 
 ```bash
-cd /workspace/LLM/llm-chat
-uv run llm-chat
+cd /workspace/LLM
+./llm chat
 ```
 
 1. ブラウザで **[http://localhost:5070](http://localhost:5070)** を開く。
@@ -74,7 +91,7 @@ bash qwen-tts/setup.sh      # Qwen3-TTS を使う場合
 
 ```bash
 cd /workspace/LLM
-bash voice-synthesize/serve.sh
+./llm studio
 ```
 
 **[http://localhost:5080](http://localhost:5080)** で音声エンジンを選び、声の説明と原稿を入力して作品を合成します。
@@ -97,7 +114,7 @@ uv run codex/setup.py
 ```bash
 # ターミナル 1: ローカルモデルのサーバー
 cd /workspace/LLM
-bash codex/serve.sh flash-next
+./llm codex flash-next
 ```
 
 ```bash
@@ -107,8 +124,8 @@ codex -p flash-next
 
 `codex -p flash-next` はローカルの Flash Next を使い、通常の `codex` は GPT を使います。
 **[API 監視画面](http://localhost:8080/api-monitor)** で入力・思考テキスト・応答を確認できます。
-Qwen3.5-9B は `bash codex/serve.sh qwen-9b` と `codex -p qwen-9b` で利用できます。Codex用コンテキストは131,072トークンです。旧 `codex -p qwen` は Flash Next の互換名です。
-Bonsai 2 は `bash codex/serve.sh bonsai` と `codex -p bonsai` で利用できます。Codex用コンテキストは98,304トークンです。
+Qwen3.5-9B は `./llm codex qwen-9b` と `codex -p qwen-9b` で利用できます。Codex用コンテキストは131,072トークンです。旧 `codex -p qwen` は Flash Next の互換名です。
+Bonsai 2 は `./llm codex bonsai` と `codex -p bonsai` で利用できます。Codex用コンテキストは98,304トークンです。
 設定と記録の詳細は [Codex の README](codex/README.md) を参照してください。
 
 ## 現在の LLM
@@ -148,13 +165,15 @@ flowchart LR
     Codex --> Bonsai["Bonsai 2 / Prism<br/>Responses API :8081"]
 ```
 
-チャットは各ディレクトリの `model.toml` を読み、選んだモデルの `serve.sh` を起動します。
+チャットは各ディレクトリの `model.toml` を読み、選んだモデルを `./llm model <ID>` 経由で起動します。
 モデルの切り替え時は前のプロセスを停止し、履歴を引き継ぎます。
-`serve.sh` は単体でも使え、既定では `http://127.0.0.1:5071/v1` に OpenAI 互換 API を提供します。
+単体のモデルAPIは `./llm model <ID>` で起動し、既定では `http://127.0.0.1:5071/v1` に OpenAI 互換 API を提供します。
 
 ```text
 LLM/
+├── llm                               共通の起動入口（既存スクリプトへ引き渡す）
 ├── llm-chat/                         統合チャット UI・検索・音声・履歴
+├── resource-dashboard/               ローカル・Colabの監視UI
 ├── voice-synthesize/                 独立した音声制作 UI と保存先
 ├── codex/                            ローカル Codex の設定・セットアップ
 ├── qwen3.5-9b/                       モデル設定・起動スクリプト
@@ -167,6 +186,7 @@ LLM/
 ├── Strata-data/                      Flash Next・MTP 等（Git 管理外）
 ├── aivisspeech/・voicevox/            CPU 読み上げエンジンの起動スクリプト
 ├── irodori-tts/・qwen-tts/            音声モデルの導入・バックエンド
+├── llm                              サーバー・Colab runtimeの共通起動コマンド
 ├── download-mmproj.sh               Qwen3.5・Gemma・Bonsai の画像モデル取得
 └── docs/                             構築記録・運用・実測
 ```

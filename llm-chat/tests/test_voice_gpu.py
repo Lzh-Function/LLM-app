@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import io
 import json
+import shutil
 import shlex
 import sys
 import tempfile
@@ -137,16 +138,20 @@ class LoadingCancellationTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        shutil.copy2(Path(__file__).resolve().parents[2] / "llm", self.root / "llm")
         with patch.object(server, "LLM_ROOT", self.root):
             self.manager = server.ModelManager()
-        script = self.root / "serve.sh"
-        script.write_text(
-            "exec "
-            + shlex.quote(sys.executable)
-            + " -c 'import time; time.sleep(60)'\n"
-        )
+        for name in ("a", "b"):
+            directory = self.root / name
+            directory.mkdir()
+            (directory / "model.toml").write_text(f'id = "{name}"\n')
+            (directory / "serve.sh").write_text(
+                "exec "
+                + shlex.quote(sys.executable)
+                + " -c 'import time; time.sleep(60)'\n"
+            )
         self.manager.models = {
-            name: server.ModelInfo(name, name, "", 1, self.root) for name in ("a", "b")
+            name: server.ModelInfo(name, name, "", 1, self.root / name) for name in ("a", "b")
         }
         self.children = []
 
