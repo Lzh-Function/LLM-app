@@ -33,6 +33,14 @@ def stop_bootstrap():
         return
 
 
+def drop_hf_token():
+    """The uploaded HuggingFace token is scratch-only; clear it before the runtime is reused."""
+    try:
+        (WORK / '.hf_token').unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def recover_drive(binary):
     """Restart the existing DriveFS cache using the runtime's prior authorization."""
     metadata = os.environ['TBE_EPHEM_CREDS_ADDR']
@@ -71,6 +79,7 @@ def drive_daemon_running(binary):
 def shutdown(flush_seconds):
     from google.colab import drive
     stop_bootstrap()
+    drop_hf_token()
     status = WORK / 'drive-sync-status.json'
     previous = json.loads(status.read_text()) if status.exists() else {}
     mounted = os.path.ismount('/content/drive')

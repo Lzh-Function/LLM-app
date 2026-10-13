@@ -24,6 +24,8 @@ ROOT = HERE.parents[1]
 LLM_COMMAND = ROOT / 'llm'
 STATE = HERE / '.runtime'
 SESSION = 'glm53-a100'
+# The token stays outside the repository and outside Drive; only its bytes travel to the scratch SSD.
+HF_TOKEN_FILE = Path.home() / '.config' / 'hf' / 'token'
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 BOOTSTRAP_DIAGNOSTICS = r"""
 import pathlib, re
@@ -291,6 +293,19 @@ class Session:
     def colab(self, *arguments, **kwargs):
         return self.run(['colab', *arguments], **kwargs)
 
+    def upload_hf_token(self, remote_dir):
+        """Put the HuggingFace token on the runtime scratch SSD.
+
+        colab upload carries the bytes through the contents API, so the value never enters a
+        command line, the executed cell text, or the CLI debug log.  It lands on the scratch
+        disk rather than Drive, so it disappears with the runtime instead of outliving the run.
+        """
+        if not HF_TOKEN_FILE.is_file():
+            say(f'HuggingFace トークンがありません（{HF_TOKEN_FILE}）。モデルは無認証でダウンロードします。')
+            return
+        self.colab('upload', '-s', SESSION, str(HF_TOKEN_FILE), remote_dir + '/.hf_token', timeout=45)
+        say('HuggingFace トークンをランタイム SSD に転送しました（値自体はログに残りません）。')
+
     def save_code_failure(self, stage, attempt, timeout, error_type):
         # Control metadata only; never copy authentication headers or VM output.
         path = STATE / 'setup-error.json'
@@ -467,6 +482,7 @@ class Session:
             self.colab('upload', '-s', SESSION, str(HERE / name), 'content/glm53-a100/' + name, timeout=45)
         self.colab('upload', '-s', SESSION, str(HERE.parent / 'colab_privacy.py'),
                    'content/glm53-a100/colab_privacy.py', timeout=45)
+        self.upload_hf_token('content/glm53-a100')
         remote_args = ['python3', '-B', '-u', '/content/glm53-a100/remote.py', '--data-dir', self.args.data_dir]
         if prepare:
             # Without --variant the remote prepares every variant; each one uses its own default context.

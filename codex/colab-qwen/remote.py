@@ -114,7 +114,7 @@ def select_variant(manifest, requested):
 
 def check_drive_space(data, profile):
     missing = 0
-    for item in profile['files']:
+    for item in drive_files(profile):
         path = data / item['destination']
         partial = path.with_name(path.name + '.part')
         present = path.stat().st_size if path.is_file() else partial.stat().st_size if partial.is_file() else 0
@@ -127,6 +127,150 @@ def check_drive_space(data, profile):
     print(f'Drive reported free space: {free / 1e9:.2f} GB; need about {(missing + reserve) / 1e9:.2f} GB', flush=True)
     if free < missing + reserve:
         raise RuntimeError('Insufficient Drive free space for the missing weights and pack; download not started.')
+
+
+def hf_files(profile):
+    """Model bodies fetched straight onto the runtime SSD; nothing about them touches Drive."""
+    return [item for item in profile['files'] if item.get('fetch') == 'huggingface']
+
+
+def drive_files(profile):
+    """Small parts and generated artifacts that keep using the persistent Drive cache."""
+    return [item for item in profile['files'] if item.get('fetch', 'drive') != 'huggingface']
+
+
+def hf_token():
+    """The uploaded HuggingFace token. Its value is never printed, and its absence still works."""
+    path = WORK / '.hf_token'
+    try:
+        value = path.read_text(encoding='ascii').strip()
+    except OSError:
+        print(f'No HuggingFace token at {path}; downloading anonymously.', flush=True)
+        return None
+    if not value:
+        print(f'HuggingFace token at {path} is empty; downloading anonymously.', flush=True)
+        return None
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    print(f'HuggingFace token loaded: {path.name} ({len(value)} chars)', flush=True)
+    return value
+
+
+def hf_response(url, offset, token):
+    headers = {}
+    if offset:
+        headers['Range'] = f'bytes={offset}-'
+    if token:
+        headers['Authorization'] = 'Bearer ' + token
+    return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120)
+
+
+def fetch_hf_to_ssd(url, destination, size, sha256, token, *, reverify=False):
+    """Stream one pinned model body onto the runtime SSD, SHA-256 checked in flight.
+
+    The Drive copy path is gone for model bodies: the only copy inference reads is this one.
+    A published file keeps a verification marker, so a server restart on the same runtime
+    transfers nothing.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    marker = destination.with_name(destination.name + '.verified.json')
+    if destination.is_file():
+        stat = destination.stat()
+        if stat.st_size != size:
+            raise RuntimeError(f'Existing runtime model file has the wrong size: {destination}. '
+                               'Move it aside before retrying.')
+        if not reverify and marker.is_file():
+            try:
+                record = json.loads(marker.read_text())
+            except ValueError:
+                record = None
+            if isinstance(record, dict) and record.get('sha256') == sha256 and record.get('size') == size:
+                print('Verified runtime SSD copy (no transfer):', destination.name, flush=True)
+                return
+        print(f'Runtime SSD copy needs a SHA-256 recheck: {destination.name}', flush=True)
+        if digest(destination) != sha256:
+            raise RuntimeError(f'Existing runtime model file fails verification: {destination}')
+        atomic_json(marker, {'sha256': sha256, 'size': size, 'mtime_ns': destination.stat().st_mtime_ns})
+        return
+    free = shutil.disk_usage(WORK).free
+    if free < size + SSD_RESERVE:
+        raise RuntimeError(f'Not enough runtime SSD space for {destination.name}: {free / 1e9:.2f} GB free, '
+                           f'need {(size + SSD_RESERVE) / 1e9:.2f} GB.')
+    partial = destination.with_name(destination.name + '.part')
+    started = time.monotonic()
+    computed = None
+    for attempt in range(6):
+        offset = partial.stat().st_size if partial.is_file() else 0
+        if offset > size:
+            raise RuntimeError(f'Partial file is too large: {partial}')
+        if offset == size:
+            break
+        checksum = hashlib.sha256()
+        if offset:  # A resumed prefix has to enter the digest before the new bytes do.
+            with partial.open('rb') as existing:
+                while block := existing.read(8 * 1024 * 1024):
+                    checksum.update(block)
+        try:
+            response = hf_response(url, offset, token)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403) and token is not None:
+                exc.close()
+                token = None
+                print('HuggingFace refused the token; retrying this file anonymously.', flush=True)
+                continue
+            if exc.code == 429:
+                exc.close()
+                wait = min(60, max(1, int(exc.headers.get('Retry-After') or 5)))
+                print(f'HuggingFace throttled the download (429); waiting {wait}s.', flush=True)
+                time.sleep(wait)
+                continue
+            raise
+        try:
+            with response, partial.open('ab') as output:
+                if offset:
+                    value = response.headers.get('Content-Range', '')
+                    if response.status != 206 or not value.startswith(f'bytes {offset}-'):
+                        raise RuntimeError('Server did not honor resume Range; keeping the partial file.')
+                elif response.status != 200:
+                    raise RuntimeError(f'Unexpected download status: {response.status}')
+                print(f'Download {destination.name}: {offset / 1e9:.2f}/{size / 1e9:.2f} GB', flush=True)
+                last_report = time.monotonic()
+                while block := response.read(8 * 1024 * 1024):
+                    if offset + len(block) > size:
+                        raise RuntimeError(f'Download exceeds the pinned file size: {destination.name}')
+                    output.write(block)
+                    checksum.update(block)
+                    offset += len(block)
+                    now = time.monotonic()
+                    if now - last_report >= 20:
+                        output.flush()
+                        elapsed = max(0.001, now - started)
+                        print(f'Download {destination.name}: {offset / 1e9:.2f}/{size / 1e9:.2f} GB '
+                              f'({offset / elapsed / 1e6:.1f} MB/s)', flush=True)
+                        last_report = now
+            if offset != size:
+                raise OSError(f'Incomplete download: {offset}/{size}')
+            computed = checksum.hexdigest()
+            break
+        except (OSError, urllib.error.URLError) as exc:
+            if attempt == 5:
+                raise
+            print(f'Download retry {attempt + 1}: {exc}', flush=True)
+            time.sleep(min(5 * (attempt + 1), 20))
+    if partial.stat().st_size != size:
+        raise RuntimeError(f'Incomplete download: {partial}')
+    if computed is None:
+        computed = digest(partial)
+    if computed != sha256:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f'SHA-256 mismatch: {destination.name}. Partial file discarded; the retry re-downloads.')
+    partial.replace(destination)
+    atomic_json(marker, {'sha256': sha256, 'size': size, 'mtime_ns': destination.stat().st_mtime_ns})
+    elapsed = max(0.001, time.monotonic() - started)
+    print(f'Runtime SSD model body ready: {destination.name}: {size / 1e9:.2f} GB in {elapsed:.1f} s '
+          f'({size / elapsed / 1e6:.1f} MB/s), SHA-256 verified', flush=True)
 
 
 def copy_model_file(source, destination, size, *, sha256=None):
@@ -198,7 +342,7 @@ def check_runtime_space(data, profile):
     pack_bytes = sum(p.stat().st_size for p in model_tree_files(pack)) if pack.is_dir() else SSD_RESERVE
     required = sum(item['size'] for item in profile['files']) + pack_bytes + SSD_RESERVE
     free = shutil.disk_usage(WORK).free
-    print(f'Runtime SSD free: {free / 1e9:.2f} GB; model copy and reserve: '
+    print(f'Runtime SSD free: {free / 1e9:.2f} GB; model bodies, pack and reserve: '
           f'{required / 1e9:.2f} GB (DriveFS cache also uses runtime disk)', flush=True)
     if free < required:
         raise RuntimeError('Not enough runtime SSD space for the selected Qwen model; copy not started.')
@@ -411,12 +555,17 @@ def main():
         cached.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(engine, cached)
     runtime_data = WORK / 'model-data'
-    print('Staging selected model data on runtime SSD:', runtime_data, flush=True)
+    token = hf_token()
+    print('Model bodies download straight onto the runtime SSD:', runtime_data, flush=True)
     for item in profile['files']:
         url = f'https://huggingface.co/{item["repo"]}/resolve/{item["revision"]}/{item["source"]}'
-        fetch_verified(url, data / item['destination'], item['size'], item['sha256'],
-                       reverify=args.reverify, skip_cache_mtime=args.skip_cache_mtime,
-                       runtime_path=runtime_data / item['destination'])
+        if item.get('fetch') == 'huggingface':
+            fetch_hf_to_ssd(url, runtime_data / item['destination'], item['size'], item['sha256'], token,
+                            reverify=args.reverify)
+        else:
+            fetch_verified(url, data / item['destination'], item['size'], item['sha256'],
+                           reverify=args.reverify, skip_cache_mtime=args.skip_cache_mtime,
+                           runtime_path=runtime_data / item['destination'])
     pack = data / profile['pack']
     pack_identity = {'strata': manifest['strata_commit'], 'gguf': profile['files'][0]['sha256']}
     runtime_pack = runtime_data / profile['pack']

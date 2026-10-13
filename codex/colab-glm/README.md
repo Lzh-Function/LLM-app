@@ -2,8 +2,9 @@
 
 GLM-5.3／GLM-5.3-Flashを、ColabのA100 high-memで実行する。
 起動時に**3変種**から選び、それぞれエンジンが異なる（`flash`はProject Maya、他2つはllama.cpp）。
-重み・Mayaのpack・ビルド済みエンジンはGDriveの `MyDrive/GLM53-data/` に保存する（Qwenの `MyDrive/Strata-data/` とは別フォルダ）。
-GGUFはローカルPCにはコピーしない。推論時にはColabの `/content/glm53-a100/model-data/` へコピーを試し、容量・I/Oの問題があればDriveから直接読む。ソース、Python環境、ビルドの作業ファイルもColabの一時ディスクに置く。
+GGUFのshardであるモデル本体は、Hugging FaceからColabの一時SSD `/content/glm53-a100/model-data/` へ直接ダウンロードし、GDriveには置かない。
+Mayaのpackとビルド済みエンジンはGDriveの `MyDrive/GLM53-data/` に保存する（Qwenの `MyDrive/Strata-data/` とは別フォルダ）。
+エンジンがモデルを読み出すのは常にSSD側で、Drive上のGGUFへ退避する経路は無い。ローカルPCへモデルはコピーしない。ソース、Python環境、ビルドの作業ファイルもColabの一時ディスクに置く。
 SSHでAPIをローカルの `127.0.0.1:8086` へ転送する。サーバー側は専用の `127.0.0.1:18081` のみで待ち受ける。
 ColabのJupyterが使う8080番との競合を避け、ビルド・取得より前にポートの空きを確認する。
 選定根拠と容量・速度の予算は [docs/14-colab-glm53-runtime-plan.md](../../docs/14-colab-glm53-runtime-plan.md)。
@@ -33,17 +34,17 @@ Codexのモデル名は `glm-5.3-flash-maya-l` / `glm-5.3-flash-uncensored-iq3_x
 
 ## 初回に必要な操作
 
-`colab-cli` のログイン済みGoogleアカウントのGDriveに、選んだモデルの重みとpack分の空きを用意する。
-3変種すべてならGGUFだけで約451.39GBなので、**460GB程度以上のクラウド側の空き**を目安にする。
-空きはDrive APIの `storageQuota` で確認する。ColabのDriveFSマウントが返す空き容量は一時ディスク／キャッシュの値なので、GDrive全体の空きとして扱わない。
-Driveマウント時のブラウザ認証では**表示された要求権限をすべて選択して許可**する。許可後はターミナルに戻ってEnterを押す。Hugging Faceのログインは不要。
+GDriveに残るのはエンジンビルド成果物とMayaのpackだけなので、**クラウド側の空きは数GB**で足りる。3変種分のGGUF（合計451.39GB）はGDriveを経由せず、Hugging FaceからColabの一時SSD（約253GB）へ直接入る。
+SSDには本体のほかにMayaのpackとDriveFSの読取キャッシュも載るため、取得前に `Runtime SSD free` で空きと必要量を表示し、足りなければダウンロードを開始しない。
+Drive側の空きはDrive APIの `storageQuota` で確認する。ColabのDriveFSマウントが返す空き容量は一時ディスク／キャッシュの値なので、GDrive全体の空きとして扱わない。
+Driveマウント時のブラウザ認証では**表示された要求権限をすべて選択して許可**する。許可後はターミナルに戻ってEnterを押す。Hugging Faceのトークンは任意（[Hugging Faceトークン](#hugging-faceトークン任意)参照）。無くても無認証でダウンロードできる。
 
 ```bash
 cd /workspace/LLM
 ./llm colab glm codex
 ```
 
-この1コマンドが runtime作成→GDriveマウント・認証→GGUF取得・SHA-256検証→ソース取得・**エンジンビルド（sm_80）**→（Mayaは）pack生成→runtime SSDへのコピーを試行→サーバー起動→Codex起動を行う。
+この1コマンドが runtime作成→GDriveマウント・認証→ソース取得・**エンジンビルド（sm_80）**→GGUF取得（SSDへ直接・SHA-256は転送中に検証）→（Mayaは）pack生成→サーバー起動→Codex起動を行う。
 `flash` の初回は Maya のエンジンコンパイルと pack 生成（全テンソルのインデックスと小さなfloat重み・tokenizerで1〜2GB。expertはGGUFに残る）が加わり、`flash-uncensored`／`full` は llama-server のビルドになる。
 初回準備の待機上限は既定240分、runtime全体の上限は6時間。必要なら `--startup-minutes 300 --max-hours 8` で変える。
 **Codexを終了するとSSH接続とモデルを終了し、GDriveの同期完了を待ってから `colab stop -s glm53-a100` を実行する。**
@@ -51,25 +52,24 @@ cd /workspace/LLM
 
 ## 2回目以降はDriveのキャッシュを使う
 
-初回に作ったものは、変種・エンジンごとにDriveへ保存し、次回以降は再取得・再ビルドしない。
+初回に作ったエンジンとMayaのpackは、変種・エンジンごとにDriveへ保存し、次回以降は再ビルドしない。モデル本体はruntimeごとにHugging Faceから取り直す。
 
 ```
 MyDrive/GLM53-data/
-├── models/Maya-L/            Maya-L 4分割と、Mayaが生成する pack/（Maya自身の配置）
-├── models/bolding-iq3_xxs/   IQ3_XXS 3分割
-├── models/slim-e192/         SLIM-E192 4分割
+├── models/Maya-L/pack/       Mayaが生成したpack（index.txt・dense.bin・tokenizer）
 └── engines/
     ├── llama-<sig>/llama-server
-    └── maya-<sig>/{strata, MAYA-BUILD.json}
+    ├── maya-<sig>/{strata, MAYA-BUILD.json}
+    └── maya-packs.json       「Mayaのビルド + context」からpackの保存先を引く索引
 ```
 
-- GGUFはサイズ・`.verified.json` が一致すれば再取得も全量ハッシュも省く。更新日時の比較は既定で省略する。再検証は `--reverify`。
+- 本体はSSD上にある間だけ `.verified.json` を持つ。同じruntimeでサーバーを再起動すればサイズ・SHA-256がmanifestと一致するため転送も全量ハッシュも省き、ログは `Verified runtime SSD copy (no transfer)`。
+- Driveに残すpackとエンジン成果物では、サイズ・`.verified.json` が一致すれば再取得も全量ハッシュも省く。更新日時の比較は既定で省略する。再検証は `--reverify`。
 - 検証記録の不一致や `--reverify` で再検証するときは、ダウンロードはし直さず、検証後に記録を更新する。検証開始・20秒ごとの読取GBと速度・完了を表示する。
 
-`--skip-cache-mtime` は既定で有効。Drive同期後の更新日時の差を無視して検証済みキャッシュを使うため、指定は不要。
-本体のサイズと `.verified.json` のサイズ・SHA-256がmanifestと一致すれば、更新日時を比較せず全量ハッシュを省く。ログは `Verified cache (mtime check skipped)`。
-初回ダウンロードは従来どおりSHA-256を検証する。検証記録が無い・壊れている・記録のSHA-256/サイズが異なる場合は全量検証し、本体のサイズが異なる場合は拒否する。
-`--reverify` を指定すれば全量検証を優先する。既定では同じサイズの内容変更は検出しないため、内容を検査するときは `--reverify` を使う。従来の更新日時比較を使う場合は `--no-skip-cache-mtime` を付ける。
+`--skip-cache-mtime` はDrive側のキャッシュで既定で有効。Drive同期後の更新日時の差を無視して検証済みキャッシュを使うため、指定は不要。
+ログは `Verified cache (mtime check skipped)`。
+モデル本体は常に転送中にSHA-256を検証するため、更新日時の判定は使わない。既存のSSDコピーで全量再検証が必要なのは `--reverify` を付けたときだけで、ログは `Runtime SSD copy needs a SHA-256 recheck`。従来の更新日時比較を使う場合は `--no-skip-cache-mtime` を付ける。
 
 ```bash
 ./llm colab glm codex
@@ -83,13 +83,27 @@ MyDrive/GLM53-data/
 - 復元した Maya の `build/strata` と `MAYA-BUILD.json` は、Maya自身のstamp検査を通るため、一致すればコンパイルを飛ばす。
 - ソース（llama.cpp、project-maya、Mayaが使うllama.cpp）と `.venv` はColabの一時ディスクに置く。runtimeごとに作り直す。
 
-## 推論時のruntime SSDコピー
+## モデル本体のHugging Face直接ダウンロード
 
-`start` / `codex` は選択した変種のGGUFをDriveから `/content/glm53-a100/model-data/` へコピーし、Mayaの場合は同じモデルフォルダのpackもコピーする。コピー中にGGUFのSHA-256を照合し、全ファイルが揃ったときだけSSDのパスでエンジンを起動する。`prepare` はDriveへの永続保存とエンジン準備だけを行い、SSDコピーはしない。
+`start` / `codex` は選択した変種のGGUFをHugging Faceから `/content/glm53-a100/model-data/` へ直接ダウンロードする。Drive上のGGUFは存在せず、DriveからSSDへコピーする経路も無い。SHA-256は転送中に計算するため、検証だけの再読込は発生しない。
+Mayaの場合は同じモデルフォルダにpackを作り、完成品をDriveへ保存する。既にpackがあるときはDriveからSSDへコピーしてMayaの再ビルドを省く（`Seeding the cached Maya pack onto the runtime SSD`）。packのコピーに失敗しても起動は止めず、MayaがSSD上で作り直す。
 
-DriveFSの読取キャッシュは同じruntime SSDを使うが、容量の使い方は起動ごとに変わる。そのため事前の空き容量だけでコピーを諦めず、5GBの空きを残しながら実際にコピーを試す。容量不足やコピー中のI/Oエラーでは途中のSSDコピーを削除し、検証済みDriveファイルを直接読む設定で起動する。Drive側ファイルのサイズ変更やコピー中のSHA-256不一致は破損の可能性があるため、Drive読込へ切り替えず起動を停止する。
+ダウンロード開始前に `Runtime SSD free` で空きと必要量を表示し、足りなければ取得へ進まない。SSDには本体・pack・DriveFSの読取キャッシュが載るため、Mayaではpack分も確保した上で判定する。
+一時ファイルは `.part` で、同じruntime内なら `Range` による続きから再開できる。SHA-256が不一致なら `.part` を捨てて先頭からやり直す。runtimeが変わるとSSDごと消えるので、本体は再びHugging Faceからダウンロードする。
+ダウンロードは開始・20秒ごとの転送GBと速度・完了を表示し、ログは `Runtime SSD model body ready`。
 
-ログの `Runtime SSD model copy complete` はSSD読込、`using Google Drive model files` はDrive読込を表す。SSDコピーはruntime停止時に消えるため、次回起動でも再度コピーを試す。Drive上のモデルとエンジンキャッシュは引き続き永続化する。
+### 実測した転送速度（2026-10-13、A100 high-mem）
+
+| 経路 | 実測 |
+|---|---|
+| Hugging Face 単一ストリーム | 154.7 MB/s |
+| Hugging Face 4並列 Range | 294.2 MB/s |
+| DriveFS 読み（キャッシュ済み） | 73.0 MB/s |
+| 一時SSD 書き込み / 読み込み | 279 MB/s / 5.4 GB/s |
+
+単一ストリームのままでもDrive経由のコピーより2.1倍速い（`flash` の156.32GBで約36分→約17分）。4並列は294 MB/sまで出るがそれはSSDの書き込み上限で、しかもSHA-256を転送中に刻めなくなるため再読込が加わって相殺される。1本でSHA-256を転送中に計算する現設計が実質的な最速なので、並列化は入れていない。
+
+`full` の160.76GBはDriveコピーでは約253GBのSSDに収まらなかったが、直接ダウンロードでは本体だけで収まり、DriveFSキャッシュとの競合が消える。
 
 ## 準備だけまとめて行う
 
@@ -98,10 +112,11 @@ DriveFSの読取キャッシュは同じruntime SSDを使うが、容量の使�
 ./llm colab glm prepare --variant full   # 1変種だけ。この場合のみ --context を指定できる
 ```
 
-サーバーもCodexも起動しない。runtime作成→GDriveマウント→変種ごとの空き容量確認→GGUF取得・SHA-256検証→エンジンビルド→（`flash` は）pack生成までを1runtimeで済ませ、完了後にGDriveを同期して停止する。
+サーバーもCodexも起動しない。runtime作成→GDriveマウント→変種ごとのDrive・SSD空き容量確認→GGUF取得（SSDへ直接・SHA-256検証）→エンジンビルド→（`flash` は）pack生成までを1runtimeで済ませ、完了後にGDriveを同期して停止する。
+変種が終わるたびにエンジンとpackをDriveへ保存してからSSD上の本体を削除する（`Released the runtime SSD copy`）ので、3変種合計451.39GBを1枚のSSDに載せず順次処理できる。本体は次回以降のruntimeで再びダウンロードする。
 contextは各変種の既定値（`flash`／`flash-uncensored` は131072、`full` は65536）を使い、`--context` は `--variant` を1つに絞った時だけ受け付ける。
 待機上限は既定480分、runtime全体は10時間、GDrive同期待ちは最大24時間（`--startup-minutes`・`--max-hours`・`--flush-minutes` で変更可）。
-完了は `bootstrap.log` の `GLM_PREPARE_COMPLETE ["flash", "flash-uncensored", "full"]` で分かる。以後の `start`／`codex` はキャッシュを使うだけになり、初回の待ち時間がサーバーを待つ時間から消える。
+完了は `bootstrap.log` の `GLM_PREPARE_COMPLETE ["flash", "flash-uncensored", "full"]` で分かる。以後の `start`／`codex` はエンジンとpackのキャッシュを使い、初回の待ち時間がビルド待ちからダウンロード時間に変わる。
 準備プロセスはこの完了行を出して正常終了する。完了行がある正常終了を `GLM_BOOTSTRAP_FAILED` と表示しない。クラウドへの保存確認は、その後の「GDriveの同期完了を確認しました。」まで待つ。
 
 ログが更新されず、進んでいるか分からない場合は、別ターミナルで確認する。
@@ -115,6 +130,22 @@ contextは各変種の既定値（`flash`／`flash-uncensored` は131072、`full
 準備待ちのログが変わらないときも、30秒ごとにこの確認コマンドを案内する。
 `prepare`／`start` のログは前回の読取位置から追加された行だけを表示する。以前の末尾8行を繰り返す表示は並列実行を意味しない。
 既に実行中のPythonプロセスにはローカルファイルの編集だけでは修正が反映されない。
+
+## Hugging Faceトークン（任意）
+
+3リポジトリはすべて `gated: false` / `private: false` なので、トークンがなくても動く。あるのは429（レート制限）の低減と、将来ライセンス同意を要求するリポジトリが増えたときの保険で、速度は上がらない。
+
+```bash
+mkdir -p ~/.config/hf
+printf '%s\n' 'hf_...' > ~/.config/hf/token
+chmod 600 ~/.config/hf/token
+```
+
+read-only（fine-grainedなら "Read" 権限のみ、リポジトリスコープ不要）で十分。書き込みは使わない。
+
+`start` がそのファイルを `colab upload` で `/content/glm53-a100/.hf_token` に送る。`colab exec --env` は使わない。実体が `os.environ['KEY'] = '値'` をセルの先頭に足すだけで、値が `~/.config/colab-cli/colab.log` と `~/.config/colab-cli/history/*.jsonl` に平文で残る（sentinelで実測: log 2件 / history 1件）。upload は contents APIなのでファイル本体はこれらのログに出ない（実測: 0件）。
+
+トークンはランタイムの一時SSDにだけ置き、GDriveには置かない。Driveは同じGoogleアカウントの他のデバイスから読めるうえ、runtimeを越えて残る。`stop` 時に削除し、runtime停止でも一緒に消える。値はログにもコマンドラインにも出さない。Hugging Faceが401/403を返した場合は無認証で自動リトライし、429は `Retry-After` を見て待つ。
 
 ## 起動・終了を分ける
 
@@ -174,7 +205,7 @@ Drive認証後のruntime再接続・作業ディレクトリ準備は、1回最�
 - ローカル: `codex/colab-glm/.runtime/` にSSH鍵、接続ログ、専用カタログ、`drive-sync-status.json`。git対象外、権限700。
 - Colab内: `/content/glm53-a100/bootstrap.log` にビルド・取得・保護ランチャーの起動結果だけを保存する。推論中の標準出力・標準エラーはRAMに保存する。準備・起動失敗時はRAMのエンジン診断もローカルの `.runtime/bootstrap-error.log` に回収する。
 
-永続保存先を変える場合は `--data-dir /content/drive/MyDrive/任意のフォルダ`。MyDriveの外や未マウントのディレクトリは拒否する。推論用の一時コピー先は常にruntime SSDの `/content/glm53-a100/model-data/`。
+永続保存先を変える場合は `--data-dir /content/drive/MyDrive/任意のフォルダ`。MyDriveの外や未マウントのディレクトリは拒否する。モデル本体のダウンロード先は常にruntime SSDの `/content/glm53-a100/model-data/` で、`--data-dir` の影響は受けない。
 
 ## 会話内容をColabのディスクへ保存しないための制限
 
@@ -219,7 +250,7 @@ Googleの管理基盤や独立した別プロセスまで含めた保存ゼロ�
 
 ## 実装の確認状況
 
-`python3 codex/colab-glm/test_framework.py` で94件が通過。
+`python3 codex/colab-glm/test_framework.py` で107件が通過。
 再開ダウンロード、SHA-256不一致、変更済みキャッシュ、Drive保存制約、空き容量、ポート競合、A100/RAMの検査、
 変種とcontextの選択（未知の値をビルド・取得前に拒否）、エンジンキャッシュキーの分離、
 llama-serverのsm_80ビルドとDriveキャッシュの復元・保存、Mayaのengine restore/saveとconfigの `model_name` 上書き、

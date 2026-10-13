@@ -32,7 +32,7 @@ RAMは `MemTotal 175,166,472 KiB` = **167.05GiB = 179.37GB**、VRAMは80GB = **7
 
 KV cache の係数は、FlashがMayaの報告で128K状態が1.78GB（fp16）・1.13GB（int8）、GLM-5.3が配布者READMEの「16Kトークンあたり約1.2GiB」（圧縮MLA/DSA cache、約75KiB/token）。CUDA context、compute buffer、prefill buffer、OS、SSHトンネルは上の「残り」から払う。
 
-**同時起動はできない。** `flash`（145.58GiB）と `flash-uncensored`（125.08GiB）の合計は270.66GiBで、246.44GiBを超える。3変種は**1つずつ起動**し、切り替えは停止→起動で、重みはDriveに既にある前提。Qwenのruntimeと同時に走らせない。MayaのRAM tierはピン留めされたメモリで、空きRAMから自動計算されるため、他プロセスに食られると tier が小さくなる。
+**同時起動はできない。** `flash`（145.58GiB）と `flash-uncensored`（125.08GiB）の合計は270.66GiBで、246.44GiBを超える。3変種は**1つずつ起動**し、切り替えは停止→起動で、切り替え先の重みはそのruntimeのSSDに無いためHFからダウンロードし直す。Qwenのruntimeと同時に走らせない。MayaのRAM tierはピン留めされたメモリで、空きRAMから自動計算されるため、他プロセスに食られると tier が小さくなる。
 
 ## 速度の見通し
 
@@ -170,27 +170,26 @@ dd if="/content/drive/MyDrive/Strata-data/models/IQ3_S/..." of=/dev/null bs=16M 
 
 ## 実装（`colab-glm`）
 
-[codex/colab-qwen](../codex/colab-qwen) の作りを踏襲する。`manifest.json` に `variants` と `default_variant` を置き、`--variant` で起動時に選び、未取得分だけを初回にDriveへダウンロードしてSHA-256で検証する。保存先はQwenの `MyDrive/Strata-data/` とは別の `/content/drive/MyDrive/GLM53-data/` にし、その中で変種別フォルダを分ける。
+[codex/colab-qwen](../codex/colab-qwen) の作りを踏襲する。`manifest.json` に `variants` と `default_variant` を置き、`--variant` で起動時に選び、未取得分だけを初回にダウンロードしてSHA-256で検証する。ファイルごとの `fetch` が取得先を決め、GGUFのshard（`huggingface`）はHFからruntime SSDへ直接、それ以外の細かいパーツ（`drive`）はQwenの `MyDrive/Strata-data/` とは別の `/content/drive/MyDrive/GLM53-data/` に置く。
 エンジンはMayaとllama.cppの2系統で、ビルド済み成果物もDriveにキャッシュする。
 
 ```
 MyDrive/GLM53-data/
-├── models/Maya-L/            Maya-L 4分割（145.58GiB）と pack/
-├── models/bolding-iq3_xxs/   IQ3_XXS 3分割（125.08GiB）
-├── models/slim-e192/         SLIM-E192 4分割（149.72GiB）
+├── models/Maya-L/pack/       Mayaが生成したpack（1〜2GB）
 └── engines/
     ├── llama-<sig>/llama-server
-    └── maya-<sig>/{strata, MAYA-BUILD.json}
+    ├── maya-<sig>/{strata, MAYA-BUILD.json}
+    └── maya-packs.json       packの保存先索引
 ```
 
 `models/Maya-L/` はMaya自身の配置（`--models-dir` の下にモデル名のフォルダ）で、**packはGGUFと同じフォルダに `pack/` として生成される**。Qwenのような `packs/` フォルダは作らない。packは全テンソルのインデックスと小さなfloat重み・tokenizer（合計1〜2GB）で、expertはGGUFに残る。Mayaは `pack/native_experts.txt` が同じGGUFを指し、`PACK_FILES` が揃っていれば作り直さない。
 `<sig>` はエンジン種別・固定commit・nvccのパスとバージョン・libc・CPU flagsのSHA-256先頭20桁。これらの条件が変わると再ビルドになる。Maya側は `build/strata` と `MAYA-BUILD.json` をそのまま復元し、Maya自身のstamp検査（source hashとarchs）を通す。
 llama.cppは `cmake -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=80` で `llama-server` だけを作り、Mayaは `maya.py --yes --no-start` でセットアップした後に `--config` で起動する2段構えにする（`--no-start` だけだとdashboard起動を飛ばせないため）。
-永続保存先はDrive内のみ、ポート競合はビルド・ダウンロード前に失敗、失敗時はruntime stopまで行う、を維持する。2026-10-13の変更で、`start` / `codex` の推論用には選択したGGUF（Mayaはpackも）をruntime SSDへコピーするようにした。容量・I/Oの問題でコピーできない場合だけDriveの重みを直接読む。`prepare` はDriveへの保存だけを行う。詳細は [colab-glm README](../codex/colab-glm/README.md#推論時のruntime-ssdコピー)。
-`prepare` はサーバーを起動せず、`--variant` を省略すると3変種分（GGUFで約420GiB）の取得と2エンジンのビルド・Mayaのpack生成を1runtimeでDriveへキャッシュする。
+永続保存先はDrive内のみ、ポート競合はビルド・ダウンロード前に失敗、失敗時はruntime stopまで行う、を維持する。2026-10-13の変更で、`start` / `codex` はGGUFをHFからruntime SSDへ直接ダウンロードするようになった。DriveからSSDへコピーする経路と、容量不足時にDriveの重みを直接読むフォールバックは廃止している（DriveFSの実測73MB/sに対しHF単一ストリームは154.7MB/s、4並列Rangeは294.2MB/s）。詳細は [colab-glm README](../codex/colab-glm/README.md#モデル本体のhugging-face直接ダウンロード)。
+`prepare` はサーバーを起動せず、`--variant` を省略すると3変種分の取得と2エンジンのビルド・Mayaのpack生成を1runtimeで済ませ、エンジンとpackをDriveへキャッシュする。変種ごとにSSD上の本体を解放するため、420GiBを1枚のSSDに載せる必要は無い。
 待機上限は `prepare` だけ480分、runtime 10時間、GDrive同期待ち30分の既定値。contextは各変種の既定値を使い、`--context` は単一変種の指定時に限る。
 
-**全変種をDriveに置くとGGUFだけで約420GiB**（145.58 + 125.08 + 149.72）。Qwen両変種（約167GB）とGLM 3変種を置いても約600GB級で、Driveの空きはこのruntimeの制約にならない。
+**GGUFはDriveに置かない**ため、Drive側の必要空き量はエンジン成果物とpackだけで済む。代わりにruntime SSD（約253GB）が本体・pack・DriveFSキャッシュを共有するので、取得前に `check_runtime_space` で容量を検査する。
 
 容量の確認にはDrive APIの `about.storageQuota` を使う。2026-10-12の稼働runtimeでは、
 DriveFSマウントの `disk_usage` はColabの一時ディスクと同じ約253GBの総量を返したため、

@@ -38,8 +38,16 @@ PAYLOAD = b'GGUF-test-data' * 100
 class Handler(http.server.BaseHTTPRequestHandler):
     ranges = []
     honor_range = True
+    authorizations = []
+    reject_token = False
 
     def do_GET(self):
+        self.authorizations.append(self.headers.get('Authorization'))
+        if self.reject_token and self.headers.get('Authorization'):
+            self.send_response(401)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
         requested = self.headers.get('Range')
         self.ranges.append(requested)
         offset = int(requested.split('=')[1].split('-')[0]) if requested and self.honor_range else 0
@@ -1130,6 +1138,152 @@ class PreflightTests(unittest.TestCase):
                  patch.object(shutdown_remote.os, 'killpg') as kill:
                 shutdown_remote.stop_bootstrap()
             kill.assert_not_called()
+
+
+class RuntimeModelDownloadTests(unittest.TestCase):
+    """Model bodies arrive from HuggingFace on the runtime SSD; Drive stays out of that path."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.url = f'http://127.0.0.1:{cls.server.server_port}/model.gguf'
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.path = self.root / 'model-data' / 'models' / 'model.gguf'
+        self.partial = self.path.with_name('model.gguf.part')
+        self.marker = self.path.with_name('model.gguf.verified.json')
+        Handler.ranges.clear()
+        Handler.authorizations.clear()
+        Handler.honor_range = True
+        Handler.reject_token = False
+
+    def fetch(self, token=None, digest=None, **kwargs):
+        with patch.object(remote, 'WORK', self.root), contextlib.redirect_stdout(io.StringIO()):
+            remote.fetch_hf_to_ssd(self.url, self.path, len(PAYLOAD),
+                                   digest or hashlib.sha256(PAYLOAD).hexdigest(), token, **kwargs)
+
+    def test_publishes_the_ssd_copy_and_skips_the_next_start(self):
+        self.fetch()
+        self.assertEqual(self.path.read_bytes(), PAYLOAD)
+        self.assertFalse(self.partial.exists())
+        self.assertEqual(json.loads(self.marker.read_text())['size'], len(PAYLOAD))
+        self.fetch()
+        self.assertEqual(len(Handler.ranges), 1)   # a restart on the same runtime transfers nothing
+
+    def test_resume_hashes_the_prefix_it_already_had(self):
+        self.path.parent.mkdir(parents=True)
+        self.partial.write_bytes(PAYLOAD[:81])
+        self.fetch()
+        self.assertEqual(Handler.ranges, ['bytes=81-'])
+        self.assertEqual(self.path.read_bytes(), PAYLOAD)
+
+    def test_checksum_mismatch_discards_the_partial(self):
+        with self.assertRaisesRegex(RuntimeError, 'SHA-256 mismatch'):
+            self.fetch(digest='0' * 64)
+        self.assertFalse(self.path.exists())
+        self.assertFalse(self.partial.exists())    # a corrupt body must not be resumed forever
+
+    def test_refused_token_falls_back_to_anonymous(self):
+        Handler.reject_token = True
+        self.fetch(token='hf_secretvalue')
+        self.assertEqual(self.path.read_bytes(), PAYLOAD)
+        self.assertEqual(Handler.authorizations, ['Bearer hf_secretvalue', None])
+
+    def test_corrupt_runtime_copy_is_rehashed_and_rejected(self):
+        self.fetch()
+        self.path.write_bytes(PAYLOAD)
+        self.marker.unlink()
+        with patch.object(remote, 'digest', return_value='0' * 64), self.assertRaisesRegex(RuntimeError, 'fails verification'):
+            self.fetch()
+
+    def test_token_value_never_reaches_the_log(self):
+        (self.root / '.hf_token').write_text('hf_secretvalue\n')
+        with patch.object(remote, 'WORK', self.root), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(remote.hf_token(), 'hf_secretvalue')
+        self.assertNotIn('hf_secretvalue', output.getvalue())
+
+    def test_missing_token_downloads_anonymously(self):
+        with patch.object(remote, 'WORK', self.root), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(remote.hf_token())
+        self.assertIn('anonymously', output.getvalue())
+
+    def test_every_model_body_in_the_shipped_manifest_bypasses_drive(self):
+        for profile in session.manifest()['variants'].values():
+            origins = {item['destination']: item.get('fetch') for item in profile['files']}
+            self.assertTrue(all(origin == 'huggingface' for name, origin in origins.items()
+                                if name.endswith('.gguf')), origins)
+            self.assertTrue(all(origin == 'drive' for name, origin in origins.items()
+                                if not name.endswith('.gguf')), origins)
+
+    def test_drive_space_check_ignores_model_bodies(self):
+        profile = {'pack': 'packs/iq3_s', 'files': [
+            {'destination': 'models/big.gguf', 'size': 60_000_000_000, 'fetch': 'huggingface'},
+            {'destination': 'mtp/rt/dense.bin', 'size': 100, 'fetch': 'drive'}]}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=6_000_000_010)), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            remote.check_drive_space(Path(directory), profile)
+        self.assertNotIn('big.gguf', output.getvalue())
+
+    def test_main_routes_each_origin_to_its_own_store(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            profile = {'pack': 'pack', 'model': 'test', 'files': [
+                {'destination': 'models/first.gguf', 'sha256': 'a', 'repo': 'test/model', 'revision': 'rev',
+                 'source': 'first.gguf', 'size': 1, 'fetch': 'huggingface'},
+                {'destination': 'mtp/rt/dense.bin', 'sha256': 'b', 'repo': 'test/model', 'revision': 'rev',
+                 'source': 'dense.bin', 'size': 1, 'fetch': 'drive'}]}
+            manifest = {'strata_commit': 'commit', 'llama_commit': 'llama', 'server_port': 18080,
+                        'default_variant': 'test', 'variants': {'test': profile}}
+            (work / 'manifest.json').write_text(json.dumps(manifest))
+            source = work / 'Strata'
+            (source / '.venv/bin').mkdir(parents=True)
+            (source / '.venv/bin/python').touch()
+            (source / 'engine-cuda12').mkdir()
+            (source / 'engine-cuda12/strata').write_text('engine')
+            pack = work / 'data/pack'
+            for name in ('dense.bin', 'index.txt', 'native_experts.txt', 'tokenizer/vocab.json',
+                         'tokenizer/chat_template.jinja'):
+                path = pack / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('pack')
+            (pack / '.complete.json').write_text(json.dumps({'strata': 'commit', 'gguf': 'a'}))
+            read_text = Path.read_text
+
+            def read(self, *args, **kwargs):
+                if str(self).endswith('/proc/meminfo'):
+                    return 'MemTotal: 167772160 kB\n'
+                return read_text(self, *args, **kwargs)
+
+            with patch.dict(os.environ), patch.object(Path, 'read_text', read), \
+                 patch.object(remote, 'WORK', work), \
+                 patch.object(sys, 'argv', ['remote.py']), \
+                 patch.object(remote, 'ensure_drive', return_value=work / 'data'), \
+                 patch.object(remote, 'check_privacy'), patch.object(remote, 'check_drive_space'), \
+                 patch.object(remote, 'source_tree'), patch.object(remote, 'run'), \
+                 patch.object(remote, 'SSD_RESERVE', 0), \
+                 patch.object(remote, 'hf_token', return_value=None), \
+                 patch.object(remote, 'fetch_hf_to_ssd') as direct, \
+                 patch.object(remote, 'fetch_verified') as cached, \
+                 patch.object(remote.shutil, 'which', return_value='/bin/nvcc'), \
+                 patch.object(remote.subprocess, 'check_output', side_effect=['A100, 81920 MiB, 8.0', 'release 12.6,']), \
+                 patch.object(remote, 'serve_private'), contextlib.redirect_stdout(io.StringIO()):
+                remote.main()
+        self.assertEqual([call.args[1].name for call in direct.call_args_list], ['first.gguf'])
+        self.assertEqual([call.args[1].name for call in cached.call_args_list], ['dense.bin'])
+        self.assertEqual(direct.call_args_list[0].args[1].parts[-3:], ('model-data', 'models', 'first.gguf'))
+        self.assertEqual(cached.call_args_list[0].args[1].parts[-4:], ('data', 'mtp', 'rt', 'dense.bin'))
 
 
 if __name__ == '__main__':

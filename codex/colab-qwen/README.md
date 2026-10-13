@@ -2,8 +2,8 @@
 
 Qwen3.8-Flash-Next GSQ-RCO **IQ3_S**を、ColabのA100 high-memで実行する。
 起動時に**通常版**または**無検閲版（abliterated）**を選べる。どちらもStrataが動かせる最大の量子化tierはIQ3_Sで、取得手順・SHA-256検証・pack生成・Codex接続は共通。
-モデル・MTP・生成済みpackはGDriveの `MyDrive/Strata-data/` に保存する。
-起動時は選択した変種のGGUF・MTP・packをColabの一時SSD `/content/strata-qwen/model-data/` へコピーし、StrataはSSD側から読み出す。ローカルPCへモデルはコピーしない。
+GGUFのshardであるモデル本体は、Hugging FaceからColabの一時SSD `/content/strata-qwen/model-data/` へ直接ダウンロードし、GDriveには置かない。
+MTP・生成済みpack・ビルド済みengineはGDriveの `MyDrive/Strata-data/` に保存し、起動時にSSDへコピーする。Strataは常にSSD側から読み出す。ローカルPCへモデルはコピーしない。
 SSHでAPIをローカルの `127.0.0.1:8085` へ転送する。Strata側は専用の `127.0.0.1:18080` のみで待ち受ける。
 ColabのJupyterが使う8080番との競合を避け、ビルド・取得より前にポートの空きを確認する。
 起動・停止・診断はリポジトリ直下の `./llm colab qwen ...` を使う。
@@ -28,15 +28,15 @@ SC117は通常版と同じ `ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF` をbase
 `tools/iq_pack.py` は `--gguf` と同じフォルダ内の `-0000N-of-0000M.gguf` を兄弟shardとして探し、`split.count` / `split.no` の一致を検査するため、
 2つの変種のshardを同じフォルダに置いてはいけない（shard 2はバイト一致でも別ファイルとして持つ）。
 そのため保存先は `models/IQ3_S-abliterated/` と `packs/iq3_s-abliterated/` に分けている。
-**両変種をGDriveに置くとGGUFだけで約167GB**（通常版83.62GB + 無検閲版83.86GB）。空き容量の検査は選択した変種の未取得分だけを見る。
+GGUFはGDriveに保存しない。GDriveに残るのはMTP・pack・engineだけで、空き容量の検査もDrive側に残すファイルの未取得分だけを見る。
 
 ## 初回に必要な操作
 
-`colab-cli` のログイン済みGoogleアカウントのGDriveに、**90GB程度以上の空き**を用意する。
-GGUFの2分割だけで通常版83,617,662,656 bytes（約83.62GB）、無検閲版83,863,586,496 bytes（約83.86GB）。MTPは約0.82GB、さらにdense packと小さなビルド成果物が加わる。
+GDriveには **数GBの空き**があれば足りる（MTP約0.82GB、dense pack約2GB、engineビルド成果物）。
+GGUFの2分割は通常版83,617,662,656 bytes（約83.62GB）、無検閲版83,863,586,496 bytes（約83.86GB）で、こちらはGDriveではなくHugging Faceから一時SSDへ直接入る。SSDはColabの約253GBを使い、本体・pack・DriveFSキャッシュが同じディスクを共有するため、起動前に空き容量を検査する。
 Driveマウント時に表示されるブラウザ認証では、**表示された要求権限をすべて選択して許可する**。
 この環境では、一部の権限だけを許可すると認証情報の転送後に `mount failed` となり、全選択でマウントが成功した。
-許可後はターミナルに戻ってEnterを押す。Hugging Faceのログインは不要。
+許可後はターミナルに戻ってEnterを押す。Hugging Faceのトークンは任意（[Hugging Faceトークン](#hugging-faceトークン任意)参照）。無くても無認証でダウンロードできる。
 
 自分のターミナルで、次を実行する。
 
@@ -61,25 +61,48 @@ cd /path/to/project
 /workspace/LLM/llm colab qwen codex -- exec 'READMEを読んで構成を説明して'
 ```
 
-初回準備は時間がかかる。クラウド同期済みの `.gguf.part` はDriveに残り、次回は続きを取得する。
-SSDへのコピーは開始・20秒ごとの転送GBと速度・完了を表示する。SHA-256検証が必要なファイルはコピー中に計算し、検証用とコピー用でDriveを二度全量読みしない。既存ファイルを検証し直した場合は `Reverified cache` と表示する。
-SHA-256が一致したファイルだけを正式名に変更する。ただし、Colabでの書き込み・検証完了とGDriveのクラウド同期完了は別。
-GDrive画面に小さなJSONだけ先に見える場合もあり、`.verified.json` だけでは本体のクラウド保存を保証しない。
-2回目以降はGGUF本体の存在・サイズ・検証マーカーが一致すれば再取得・全量ハッシュを省く。更新日時の比較は既定で省略する。
-全量再検証が必要なときは `--reverify` を付ける。
-検証済みキャッシュでも、新しいruntimeではSSDへのコピーが必要。起動前と各ファイルのコピー前に空き容量を確認し、不足したら推論を開始せず停止する。DriveFSのキャッシュも同じruntimeディスクを消費するため、その後の容量不足でもコピーは失敗し得る。
-packが未作成ならSSD上のGGUFからSSD上に生成し、完成品をDriveにも保存する。既存packはモデル用ファイルとtokenizerだけをコピーする。毎回のDrive→SSD転送時間は必要で、A100実機での起動時間短縮は未測定。
+モデル本体のダウンロードは開始・20秒ごとの転送GBと速度・完了を表示し、SHA-256は転送中に計算する（検証だけの再読込は発生しない）。
+SHA-256が一致したファイルだけを正式名に変更し、`.verified.json` にサイズとSHA-256を記録する。一時ファイル `.part` はSSDに残るため、同じruntime内なら続きから再開できる。
+runtimeが変わるとSSDごと消えるので、本体は再びHugging Faceからダウンロードする。同じruntimeでサーバーを再起動すると `Verified runtime SSD copy (no transfer)` と表示され、本体の転送はゼロ。
+SHA-256が不一致のときは `.part` を捨てて先頭からやり直す（壊れた続きを拾い続けない）。
+packが未作成ならSSD上のGGUFからSSD上に生成し、完成品をDriveに保存する。既存packはDriveからSSDへコピーする（約2GB）。
 
-`--skip-cache-mtime` は既定で有効。Drive同期後の更新日時の差を無視して検証済みキャッシュを使うため、指定は不要。
+### 実測した転送速度（2026-10-13、A100 high-mem）
+
+| 経路 | 実測 |
+|---|---|
+| Hugging Face 単一ストリーム | 154.7 MB/s |
+| Hugging Face 4並列 Range | 294.2 MB/s |
+| DriveFS 読み（キャッシュ済み） | 73.0 MB/s |
+| 一時SSD 書き込み / 読み込み | 279 MB/s / 5.4 GB/s |
+
+単一ストリームのままでもDrive経由のコピーより2.1倍速い（84.44GBで約19分→約9分）。4並列は294 MB/sまで出るが、それはSSDの書き込み上限で、しかもSHA-256を転送中に刻めなくなるため再読込（84GBで約4分）で相殺される。1本でSHA-256を転送中に計算する現設計が実質的な最速なので、並列化は入れていない。
+
+Driveに残すMTPとpackのキャッシュでは `--skip-cache-mtime` が既定で有効。Drive同期後の更新日時の差を無視して検証済みキャッシュを使うため、指定は不要。
 本体のサイズと `.verified.json` のサイズ・SHA-256がmanifestと一致すれば、更新日時を比較せず全量ハッシュを省く。ログは `Verified cache (mtime check skipped)`。
-初回ダウンロードは従来どおりSHA-256を検証する。検証記録が無い・壊れている・記録のSHA-256/サイズが異なる場合は全量検証し、本体のサイズが異なる場合は拒否する。
-`--reverify` を指定すれば全量検証を優先する。既定では同じサイズの内容変更は検出しないため、内容を検査するときは `--reverify` を使う。従来の更新日時比較を使う場合は `--no-skip-cache-mtime` を付ける。
+モデル本体は常に転送中にSHA-256を検証するため、更新日時の判定は使わない。既存のSSDコピーで全量再検証が必要なのは `--reverify` を付けたときだけで、ログは `Runtime SSD copy needs a SHA-256 recheck`。
 
 ```bash
 ./llm colab qwen codex --variant uncensored
 ./llm colab qwen start
 ./llm colab qwen start --reverify # 全量SHA検証
 ```
+
+## Hugging Faceトークン（任意）
+
+5リポジトリはすべて `gated: false` / `private: false` なので、トークンがなくても動く。あるのは429（レート制限）の低減と、将来ライセンス同意を要求するリポジトリが増えたときの保険で、速度は上がらない。
+
+```bash
+mkdir -p ~/.config/hf
+printf '%s\n' 'hf_...' > ~/.config/hf/token
+chmod 600 ~/.config/hf/token
+```
+
+read-only（fine-grainedなら "Read" 権限のみ、リポジトリスコープ不要）で十分。書き込みは使わない。
+
+`start` がそのファイルを `colab upload` で `/content/strata-qwen/.hf_token` に送る。`colab exec --env` は使わない。実体が `os.environ['KEY'] = '値'` をセルの先頭に足すだけで、値が `~/.config/colab-cli/colab.log` と `~/.config/colab-cli/history/*.jsonl` に平文で残る（sentinelで実測: log 2件 / history 1件）。upload は contents APIなのでファイル本体はこれらのログに出ない（実測: 0件）。
+
+トークンはランタイムの一時SSDにだけ置き、GDriveには置かない。Driveは同じGoogleアカウントの他のデバイスから読めるうえ、runtimeを越えて残る。`stop` 時に削除し、runtime停止でも一緒に消える。値はログにもコマンドラインにも出さない。Hugging Faceが401/403を返した場合は無認証で自動リトライし、429は `Retry-After` を見て待つ。
 
 
 ## 起動・終了を分ける

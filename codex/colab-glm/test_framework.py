@@ -38,8 +38,16 @@ PAYLOAD = b'GGUF-test-data' * 100
 class Handler(http.server.BaseHTTPRequestHandler):
     ranges = []
     honor_range = True
+    authorizations = []
+    reject_token = False
 
     def do_GET(self):
+        self.authorizations.append(self.headers.get('Authorization'))
+        if self.reject_token and self.headers.get('Authorization'):
+            self.send_response(401)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
         requested = self.headers.get('Range')
         self.ranges.append(requested)
         offset = int(requested.split('=')[1].split('-')[0]) if requested and self.honor_range else 0
@@ -449,7 +457,8 @@ class EngineCacheTests(unittest.TestCase):
                  patch.object(remote, 'run') as run, \
                  contextlib.redirect_stdout(io.StringIO()):
                 python, root, config = remote.maya_setup(self.manifest, self.manifest['variants']['flash'],
-                                                         self.data, 131072, 18081, 'sig')
+                                                         self.data, self.data.parent / 'model-data',
+                                                         131072, 18081, 'sig')
             self.assertEqual((cached / 'strata').read_bytes(), b'engine')
             command = [str(part) for part in run.call_args_list[-1].args]
             self.assertIn('--yes', command)
@@ -457,7 +466,8 @@ class EngineCacheTests(unittest.TestCase):
             self.assertIn('--no-vision', command)
             self.assertIn('--model', command)
             self.assertEqual(command[command.index('--model') + 1], 'Maya-L')
-            self.assertEqual(command[command.index('--models-dir') + 1], str(self.data / 'models'))
+            self.assertEqual(command[command.index('--models-dir') + 1],
+                             str(self.data.parent / 'model-data' / 'models'))
             self.assertEqual(command[command.index('--context') + 1], '131072')
             self.assertIn('--env', command)
             self.assertEqual(command[command.index('--env') + 1], 'STRATA_GLM_RAM_RESIDENT=1')
@@ -478,12 +488,13 @@ class EngineCacheTests(unittest.TestCase):
                  patch.object(remote, 'ensure_venv', return_value=Path('/venv/bin/python')), \
                  patch.object(remote, 'run') as run, \
                  contextlib.redirect_stdout(io.StringIO()) as output:
-                remote.maya_setup(self.manifest, self.manifest['variants']['flash'], self.data, 65536, 18081, 'sig')
+                remote.maya_setup(self.manifest, self.manifest['variants']['flash'], self.data,
+                                   self.data.parent / 'model-data', 65536, 18081, 'sig')
             self.assertIn('Cached A100 Maya engine:', output.getvalue())
             self.assertEqual((source / 'build' / 'strata').read_bytes(), b'engine')
             self.assertIn('Cached A100 Maya engine for the next run:', output.getvalue())
 
-    def run_main(self, variant, work, extra=(), *, use_ssd=False):
+    def run_main(self, variant, work, extra=()):
         calls = []
         chdirs = []
 
@@ -504,15 +515,15 @@ class EngineCacheTests(unittest.TestCase):
                                       'installer': {'models_dir': str(data / 'models')}}))
         with patch.object(remote, 'WORK', Path(work)), \
              patch.object(remote, 'ensure_drive', return_value=Path(work) / 'drive'), \
-             patch.object(remote, 'check_server_port'), patch.object(remote, 'check_drive_space'), \
-             patch.object(remote, 'check_privacy'), \
-             patch.object(remote, 'check_accelerator'), patch.object(remote, 'check_ram'), \
+             patch.multiple(remote, check_server_port=Mock(), check_drive_space=Mock(), check_privacy=Mock(),
+                            check_accelerator=Mock(), check_ram=Mock(), check_runtime_space=Mock(),
+                            persist_maya_pack=Mock(), engine_signature=Mock(return_value='sig'),
+                            hf_token=Mock(return_value=None)), \
              patch.object(remote.os, 'chdir', side_effect=lambda path: chdirs.append(path)), \
              patch.object(remote.shutil, 'which', return_value='/usr/bin/nvcc'), \
              patch.object(remote.subprocess, 'check_output', return_value='nvcc'), \
-             patch.object(remote, 'engine_signature', return_value='sig'), \
              patch.object(remote, 'fetch_verified') as fetch, \
-             patch.object(remote, 'stage_model_on_ssd', return_value=(Path(work) / 'model-data' if use_ssd else data)), \
+             patch.object(remote, 'fetch_hf_to_ssd') as direct, \
              patch.object(remote, 'llama_server', return_value=Path('/content/glm53-a100/llama.cpp/build/bin/llama-server')), \
              patch.object(remote, 'maya_setup', return_value=(Path('/venv/bin/python'), Path('/maya'), config)), \
              patch.object(remote, 'serve_private', side_effect=serve_private), \
@@ -520,24 +531,24 @@ class EngineCacheTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(SystemExit):
                 remote.main()
-        return calls[0], fetch, chdirs
+        return calls[0], direct, chdirs
 
     def test_llama_variant_starts_llama_server_with_its_own_shards(self):
         with tempfile.TemporaryDirectory() as work:
-            argv, fetch, chdirs = self.run_main('full', work)
+            argv, direct, chdirs = self.run_main('full', work)
         self.assertEqual(argv[0], '/content/glm53-a100/llama.cpp/build/bin/llama-server')
         self.assertEqual(argv[argv.index('-m') + 1],
-                         str(Path(work) / 'drive' / 'models/slim-e192/GLM-5.3-Q2-DGX-Spark-00001-of-00004.gguf'))
+                         str(Path(work) / 'model-data' / 'models/slim-e192/GLM-5.3-Q2-DGX-Spark-00001-of-00004.gguf'))
         self.assertEqual(argv[argv.index('-c') + 1], '65536')
         self.assertEqual(argv[argv.index('--alias') + 1], 'glm-5.3-slim-e192')
         self.assertEqual(argv[argv.index('--port') + 1], '18081')
         self.assertIn('--log-disable', argv)
         self.assertIn('--metrics', argv)
-        self.assertEqual(len(fetch.call_args_list), 4)
+        self.assertEqual(len(direct.call_args_list), 4)
 
     def test_maya_variant_starts_from_the_generated_config(self):
         with tempfile.TemporaryDirectory() as work:
-            argv, fetch, chdirs = self.run_main('flash', work)
+            argv, direct, chdirs = self.run_main('flash', work)
         self.assertEqual(argv[0], '/venv/bin/python')
         self.assertEqual(argv[1], '/maya/serve/server.py')
         self.assertEqual(argv[argv.index('--engine') + 1], 'strata')
@@ -545,27 +556,19 @@ class EngineCacheTests(unittest.TestCase):
         self.assertEqual(argv[argv.index('--port') + 1], '18081')
         # Maya resolves its own relative paths, so the server starts from its own tree.
         self.assertEqual(chdirs, [Path('/maya')])
-        self.assertEqual(len(fetch.call_args_list), 4)
+        self.assertEqual(len(direct.call_args_list), 4)
 
-    def test_llama_variant_uses_ssd_shards_after_successful_staging(self):
+    def test_llama_variant_reads_the_shards_downloaded_onto_the_ssd(self):
         with tempfile.TemporaryDirectory() as work:
-            argv, _, _ = self.run_main('full', work, use_ssd=True)
+            argv, direct, _ = self.run_main('full', work)
             self.assertEqual(argv[argv.index('-m') + 1],
                              str(Path(work) / 'model-data' / self.manifest['variants']['full']['llama']['first_shard']))
+            for call in direct.call_args_list:
+                self.assertTrue(call.args[1].is_relative_to(Path(work) / 'model-data'))
 
-    def test_maya_variant_repoints_pack_and_tokenizer_only_after_ssd_staging(self):
+    def test_maya_variant_keeps_the_pack_path_maya_chose(self):
         with tempfile.TemporaryDirectory() as work:
-            argv, _, _ = self.run_main('flash', work, use_ssd=True)
-            config = json.loads(Path(argv[argv.index('--config') + 1]).read_text())
-            pack = Path(work) / 'model-data' / 'models' / 'Maya-L' / 'pack'
-            self.assertEqual(config['args'][config['args'].index('--glm-pack') + 1], str(pack))
-            self.assertEqual(config['tokenizer'], str(pack / 'tokenizer'))
-            self.assertEqual(config['installer']['models_dir'], str(Path(work) / 'model-data' / 'models'))
-
-    def test_maya_config_write_failure_keeps_the_drive_paths(self):
-        with tempfile.TemporaryDirectory() as work, \
-             patch.object(remote, 'repoint_maya_config', side_effect=OSError(28, 'No space left on device')):
-            argv, _, _ = self.run_main('flash', work, use_ssd=True)
+            argv, _, _ = self.run_main('flash', work)
             config = json.loads(Path(argv[argv.index('--config') + 1]).read_text())
             self.assertEqual(config['args'][config['args'].index('--glm-pack') + 1],
                              str(Path(work) / 'drive' / 'models' / 'Maya-L' / 'pack'))
@@ -574,120 +577,258 @@ class EngineCacheTests(unittest.TestCase):
         (Path(work) / 'manifest.json').write_text(json.dumps(self.manifest))
         with patch.object(remote, 'WORK', Path(work)), \
              patch.object(remote, 'ensure_drive', return_value=Path(work) / 'drive'), \
-             patch.object(remote, 'check_server_port'), patch.object(remote, 'check_drive_space'), \
-             patch.object(remote, 'check_accelerator'), patch.object(remote, 'check_ram'), \
+             patch.multiple(remote, check_server_port=Mock(), check_drive_space=Mock(), check_accelerator=Mock(),
+                            check_ram=Mock(), check_runtime_space=Mock(), persist_maya_pack=Mock(),
+                            release_model_bodies=Mock(), engine_signature=Mock(return_value='sig'),
+                            hf_token=Mock(return_value=None)), \
              patch.object(remote.shutil, 'which', return_value='/usr/bin/nvcc'), \
              patch.object(remote.subprocess, 'check_output', return_value='nvcc'), \
-             patch.object(remote, 'engine_signature', return_value='sig'), \
              patch.object(remote, 'fetch_verified') as fetch, \
+             patch.object(remote, 'fetch_hf_to_ssd') as direct, \
              patch.object(remote, 'llama_server', return_value=Path('/engine/llama-server')) as llama, \
              patch.object(remote, 'maya_setup', return_value=(Path('/venv/bin/python'), Path('/maya'), Path('/maya/c.json'))) as maya, \
              patch.object(remote.os, 'execv') as execv, \
              patch.object(sys, 'argv', ['remote.py', *argv]), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             remote.main()
-        return fetch, llama, maya, execv, output.getvalue()
+        return direct, llama, maya, execv, output.getvalue()
 
-    def test_serving_passes_skip_mtime_to_every_model_shard(self):
+    def test_serving_reverifies_every_downloaded_body(self):
         with tempfile.TemporaryDirectory() as work:
-            _, fetch, _ = self.run_main('full', work)
-        self.assertTrue(fetch.call_args_list)
-        self.assertTrue(all(call.kwargs['skip_cache_mtime'] for call in fetch.call_args_list))
+            _, direct, _ = self.run_main('full', work, extra=('--reverify',))
+        self.assertTrue(direct.call_args_list)
+        self.assertTrue(all(call.kwargs['reverify'] for call in direct.call_args_list))
 
-    def test_prepare_passes_skip_mtime_and_reverify_to_every_variant(self):
+    def test_prepare_passes_reverify_to_every_variant(self):
         with tempfile.TemporaryDirectory() as work:
-            fetch, _, _, _, _ = self.run_prepare(['--prepare', '--reverify'], work)
-        self.assertTrue(fetch.call_args_list)
-        self.assertTrue(all(call.kwargs['skip_cache_mtime'] and call.kwargs['reverify']
-                            for call in fetch.call_args_list))
+            direct, _, _, _, _ = self.run_prepare(['--prepare', '--reverify'], work)
+        self.assertTrue(direct.call_args_list)
+        self.assertTrue(all(call.kwargs['reverify'] for call in direct.call_args_list))
 
     def test_prepare_without_variant_fetches_all_variants_and_starts_nothing(self):
         with tempfile.TemporaryDirectory() as work:
-            fetch, llama, maya, execv, output = self.run_prepare(['--prepare'], work)
+            direct, llama, maya, execv, output = self.run_prepare(['--prepare'], work)
         self.assertEqual(execv.call_count, 0)          # prepare never becomes a server
-        self.assertTrue(all(call.kwargs['skip_cache_mtime'] for call in fetch.call_args_list))
         self.assertEqual(maya.call_count, 1)           # Maya's setup also writes the pack
         self.assertEqual(llama.call_count, 2)          # the second llama variant reuses the cached binary
-        self.assertEqual(len(fetch.call_args_list), sum(len(v['files']) for v in self.manifest['variants'].values()))
+        self.assertEqual(len(direct.call_args_list), sum(len(v['files']) for v in self.manifest['variants'].values()))
         self.assertIn('GLM_PREPARE_COMPLETE ["flash", "flash-uncensored", "full"]', output)
 
     def test_prepare_of_one_variant_leaves_the_others_untouched(self):
         with tempfile.TemporaryDirectory() as work:
-            fetch, llama, maya, execv, output = self.run_prepare(['--prepare', '--variant', 'full', '--context', '32768'], work)
-        self.assertEqual((maya.call_count, llama.call_count, len(fetch.call_args_list)), (0, 1, 4))
+            direct, llama, maya, execv, output = self.run_prepare(['--prepare', '--variant', 'full', '--context', '32768'], work)
+        self.assertEqual((maya.call_count, llama.call_count, len(direct.call_args_list)), (0, 1, 4))
         self.assertIn('GLM_PREPARE_COMPLETE ["full"]', output)
 
 
-class RuntimeModelStagingTests(unittest.TestCase):
+class MayaPackCacheTests(unittest.TestCase):
+    """The generated Maya pack keeps using Drive; the shards around it no longer do."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.work = Path(self.tmp.name) / 'runtime'
-        self.data = Path(self.tmp.name) / 'drive'
-        self.work.mkdir()
-        self.data.mkdir()
-        self.files = [('models/Maya-L/first.gguf', b'first verified shard'),
-                      ('models/Maya-L/second.gguf', b'second verified shard')]
-        self.profile = {'files': []}
-        for relative, payload in self.files:
-            path = self.data / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(payload)
-            self.profile['files'].append({'destination': relative, 'size': len(payload),
-                                          'sha256': hashlib.sha256(payload).hexdigest()})
+        self.data = self.work / 'drive'
+        self.runtime_data = self.work / 'model-data'
+        self.data.mkdir(parents=True)
+        self.runtime_data.mkdir(parents=True)
+        self.profile = {'maya': {'model': 'Maya-L'}}
+        self.relative = 'models/Maya-L/pack'
+        self.config = self.work / 'maya-maya-l.json'
 
-    def test_complete_model_and_maya_pack_are_copied_to_ssd(self):
-        pack = self.data / 'models' / 'Maya-L' / 'pack'
+    def write_pack(self, folder):
         for name in remote.MAYA_PACK_FILES:
-            path = pack / name
+            path = folder / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(name.encode())
+
+    def test_built_pack_is_published_to_drive_with_an_index(self):
+        pack = self.runtime_data / self.relative
+        self.write_pack(pack)
+        self.config.write_text(json.dumps({'args': ['--glm-pack', str(pack)]}))
         with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 1), \
-             contextlib.redirect_stdout(io.StringIO()):
-            selected = remote.stage_model_on_ssd(self.data, self.profile, pack)
-        self.assertEqual(selected, self.work / 'model-data')
-        for relative, payload in self.files:
-            self.assertEqual((selected / relative).read_bytes(), payload)
-        for name in remote.MAYA_PACK_FILES:
-            self.assertEqual((selected / 'models' / 'Maya-L' / 'pack' / name).read_bytes(), name.encode())
-        self.assertFalse(list(selected.rglob('*.part')))
-
-    def test_disk_capacity_failure_falls_back_and_removes_partial_copy(self):
-        original = remote.copy_model_file
-        attempts = 0
-
-        def fail_second(source, destination, size, sha256):
-            nonlocal attempts
-            attempts += 1
-            if attempts == 2:
-                raise OSError(28, 'No space left on device')
-            return original(source, destination, size, sha256)
-
-        with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 1), \
-             patch.object(remote, 'copy_model_file', side_effect=fail_second), \
              contextlib.redirect_stdout(io.StringIO()) as output:
-            selected = remote.stage_model_on_ssd(self.data, self.profile)
-        self.assertEqual(selected, self.data)
-        self.assertEqual(attempts, 2)
-        self.assertFalse((self.work / 'model-data').exists())
-        self.assertIn('using Google Drive model files', output.getvalue())
-        for relative, payload in self.files:
-            self.assertEqual((self.data / relative).read_bytes(), payload)
+            remote.persist_maya_pack(self.data, self.runtime_data, self.config, self.profile, 131072)
+        self.write_pack(self.data / self.relative)
+        self.assertEqual((self.data / self.relative / 'index.txt').read_bytes(), b'index.txt')
+        index = json.loads((self.data / remote.MAYA_PACK_INDEX).read_text())
+        self.assertEqual(index['Maya-L|131072'], self.relative)
+        self.assertIn('Cached the Maya pack on Drive', output.getvalue())
 
-    def test_low_runtime_reserve_falls_back_without_touching_drive(self):
-        with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 5), \
-             patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=4)), \
-             contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(remote.stage_model_on_ssd(self.data, self.profile), self.data)
-        self.assertFalse((self.work / 'model-data').exists())
+    def test_cached_pack_is_seeded_back_onto_the_ssd(self):
+        self.write_pack(self.data / self.relative)
+        (self.data / remote.MAYA_PACK_INDEX).parent.mkdir(parents=True, exist_ok=True)
+        (self.data / remote.MAYA_PACK_INDEX).write_text(json.dumps({'Maya-L|131072': self.relative}))
+        with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 1), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            remote.seed_maya_pack(self.data, self.runtime_data, self.profile, 131072)
+        self.assertEqual((self.runtime_data / self.relative / 'index.txt').read_bytes(), b'index.txt')
+        self.assertIn('Seeding the cached Maya pack', output.getvalue())
 
-    def test_sha_mismatch_stops_instead_of_serving_corrupt_drive_source(self):
-        self.profile['files'][0]['sha256'] = '0' * 64
+    def test_a_different_context_does_not_seed_the_other_pack(self):
+        self.write_pack(self.data / self.relative)
+        (self.data / remote.MAYA_PACK_INDEX).parent.mkdir(parents=True, exist_ok=True)
+        (self.data / remote.MAYA_PACK_INDEX).write_text(json.dumps({'Maya-L|131072': self.relative}))
+        with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 1), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            remote.seed_maya_pack(self.data, self.runtime_data, self.profile, 32768)
+        self.assertFalse((self.runtime_data / self.relative).exists())
+        self.assertEqual(output.getvalue(), '')
+
+    def test_a_full_disk_still_starts_with_a_rebuilt_pack(self):
+        pack = self.runtime_data / self.relative
+        self.write_pack(pack)
+        self.config.write_text(json.dumps({'args': ['--glm-pack', str(pack)]}))
+        with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 1), \
+             patch.object(remote, 'copy_model_file', side_effect=remote.InsufficientRuntimeSpace('full')), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            remote.persist_maya_pack(self.data, self.runtime_data, self.config, self.profile, 131072)
+        self.assertIn('the next runtime rebuilds it', output.getvalue())
+        self.assertFalse((self.data / remote.MAYA_PACK_INDEX).exists())
+
+    def test_an_incomplete_built_pack_stops_the_start(self):
+        pack = self.runtime_data / self.relative
+        (pack / 'index.txt').parent.mkdir(parents=True)
+        (pack / 'index.txt').write_bytes(b'index.txt')
+        self.config.write_text(json.dumps({'args': ['--glm-pack', str(pack)]}))
         with patch.object(remote, 'WORK', self.work), patch.object(remote, 'SSD_RESERVE', 1), \
              contextlib.redirect_stdout(io.StringIO()):
-            with self.assertRaises(remote.ModelCopyIntegrityError):
-                remote.stage_model_on_ssd(self.data, self.profile)
-        self.assertFalse((self.work / 'model-data').exists())
+            with self.assertRaisesRegex(RuntimeError, 'Maya pack is missing'):
+                remote.persist_maya_pack(self.data, self.runtime_data, self.config, self.profile, 131072)
+
+    def test_prepared_variants_release_their_bodies_for_the_next_one(self):
+        profile = {'files': [{'destination': 'models/a.gguf', 'size': 5, 'fetch': 'huggingface'},
+                             {'destination': 'mtp/rt/dense.bin', 'size': 5, 'fetch': 'drive'}]}
+        for relative in ('models/a.gguf', 'mtp/rt/dense.bin'):
+            path = self.runtime_data / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'bytes')
+            path.with_name(path.name + '.verified.json').write_text('{}')
+        with contextlib.redirect_stdout(io.StringIO()):
+            remote.release_model_bodies(profile, self.runtime_data)
+        self.assertFalse((self.runtime_data / 'models/a.gguf').exists())
+        self.assertFalse((self.runtime_data / 'models/a.gguf.verified.json').exists())
+        self.assertTrue((self.runtime_data / 'mtp/rt/dense.bin').exists())
+
+
+class RuntimeModelDownloadTests(unittest.TestCase):
+    """Model bodies arrive from HuggingFace on the runtime SSD; Drive stays out of that path."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.url = f'http://127.0.0.1:{cls.server.server_port}/model.gguf'
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.path = self.root / 'model-data' / 'models' / 'model.gguf'
+        self.partial = self.path.with_name('model.gguf.part')
+        self.marker = self.path.with_name('model.gguf.verified.json')
+        Handler.ranges.clear()
+        Handler.authorizations.clear()
+        Handler.honor_range = True
+        Handler.reject_token = False
+
+    def fetch(self, token=None, digest=None, **kwargs):
+        with patch.object(remote, 'WORK', self.root), contextlib.redirect_stdout(io.StringIO()):
+            remote.fetch_hf_to_ssd(self.url, self.path, len(PAYLOAD),
+                                   digest or hashlib.sha256(PAYLOAD).hexdigest(), token, **kwargs)
+
+    def test_publishes_the_ssd_copy_and_skips_the_next_start(self):
+        self.fetch()
+        self.assertEqual(self.path.read_bytes(), PAYLOAD)
+        self.assertFalse(self.partial.exists())
+        self.assertEqual(json.loads(self.marker.read_text())['size'], len(PAYLOAD))
+        self.fetch()
+        self.assertEqual(len(Handler.ranges), 1)   # a restart on the same runtime transfers nothing
+
+    def test_resume_hashes_the_prefix_it_already_had(self):
+        self.path.parent.mkdir(parents=True)
+        self.partial.write_bytes(PAYLOAD[:81])
+        self.fetch()
+        self.assertEqual(Handler.ranges, ['bytes=81-'])
+        self.assertEqual(self.path.read_bytes(), PAYLOAD)
+
+    def test_checksum_mismatch_discards_the_partial(self):
+        with self.assertRaisesRegex(RuntimeError, 'SHA-256 mismatch'):
+            self.fetch(digest='0' * 64)
+        self.assertFalse(self.path.exists())
+        self.assertFalse(self.partial.exists())    # a corrupt body must not be resumed forever
+
+    def test_refused_token_falls_back_to_anonymous(self):
+        Handler.reject_token = True
+        self.fetch(token='hf_secretvalue')
+        self.assertEqual(self.path.read_bytes(), PAYLOAD)
+        self.assertEqual(Handler.authorizations, ['Bearer hf_secretvalue', None])
+
+    def test_corrupt_runtime_copy_is_rehashed_and_rejected(self):
+        self.fetch()
+        self.path.write_bytes(PAYLOAD)
+        self.marker.unlink()
+        with patch.object(remote, 'digest', return_value='0' * 64), \
+             self.assertRaisesRegex(RuntimeError, 'fails verification'):
+            self.fetch()
+
+    def test_token_value_never_reaches_the_log(self):
+        (self.root / '.hf_token').write_text('hf_secretvalue\n')
+        with patch.object(remote, 'WORK', self.root), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(remote.hf_token(), 'hf_secretvalue')
+        self.assertNotIn('hf_secretvalue', output.getvalue())
+
+    def test_missing_token_downloads_anonymously(self):
+        with patch.object(remote, 'WORK', self.root), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(remote.hf_token())
+        self.assertIn('anonymously', output.getvalue())
+
+    def test_every_model_body_in_the_shipped_manifest_bypasses_drive(self):
+        for profile in session.manifest()['variants'].values():
+            self.assertTrue(all(item.get('fetch') == 'huggingface' for item in profile['files']), profile)
+
+    def test_fetch_variant_sends_bodies_to_the_ssd(self):
+        profile = {'files': [{'destination': 'models/big.gguf', 'size': 1, 'sha256': 'a',
+                              'repo': 'r/m', 'revision': 'v', 'source': 'big.gguf', 'fetch': 'huggingface'},
+                             {'destination': 'mtp/rt/dense.bin', 'size': 1, 'sha256': 'b',
+                              'repo': 'r/m', 'revision': 'v', 'source': 'dense.bin', 'fetch': 'drive'}]}
+        with patch.object(remote, 'fetch_hf_to_ssd') as direct, \
+             patch.object(remote, 'fetch_verified') as cached:
+            remote.fetch_variant(profile, Path('/drive'), Path('/ssd/model-data'), None, False)
+        self.assertEqual(direct.call_args_list[0].args[1].parts[-3:], ('model-data', 'models', 'big.gguf'))
+        self.assertEqual(cached.call_args_list[0].args[1].parts[1:4], ('drive', 'mtp', 'rt'))
+
+    def test_drive_space_check_ignores_model_bodies(self):
+        profile = {'engine': 'llama', 'files': [
+            {'destination': 'models/big.gguf', 'size': 160_000_000_000, 'fetch': 'huggingface'}]}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=1000)), \
+             patch.object(remote, 'drive_free_bytes', return_value=1000), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            remote.check_drive_space(Path(directory), profile)
+        self.assertIn('missing weights: 0.00 GB', output.getvalue())
+
+    def test_runtime_capacity_is_checked_before_the_download(self):
+        profile = {'engine': 'llama', 'files': [{'destination': 'models/big.gguf', 'size': 160_000_000_000}]}
+        with patch.object(remote, 'WORK', self.root), \
+             patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=150_000_000_000)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, 'Not enough runtime SSD space'):
+                remote.check_runtime_space(profile, self.root / 'model-data')
+
+    def test_full_variant_fits_once_the_drive_copy_is_gone(self):
+        profile = session.manifest()['variants']['full']
+        with patch.object(remote, 'WORK', self.root), \
+             patch.object(remote.shutil, 'disk_usage', return_value=SimpleNamespace(free=253_000_000_000)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            remote.check_runtime_space(profile, self.root / 'model-data')
 
 
 class HealthTests(unittest.TestCase):

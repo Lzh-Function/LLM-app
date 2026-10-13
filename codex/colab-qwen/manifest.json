@@ -16,6 +16,7 @@
           "revision": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",
           "source": "IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
           "destination": "models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+          "fetch": "huggingface",
           "size": 54817524224,
           "sha256": "4c1eb2ceb4915e1192f4f386021897bde56a97f40a0bb78bb86465e0f7d2aca3"
         },
@@ -24,6 +25,7 @@
           "revision": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",
           "source": "IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
           "destination": "models/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+          "fetch": "huggingface",
           "size": 28800138432,
           "sha256": "316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
         },
@@ -32,6 +34,7 @@
           "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
           "source": "strata/rt/dense.bin",
           "destination": "mtp/rt/dense.bin",
+          "fetch": "drive",
           "size": 116099072,
           "sha256": "c724dc0b0822ada5d2977bf5bde821605feabaa64ea2e0045b67ca656329070a"
         },
@@ -40,6 +43,7 @@
           "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
           "source": "strata/rt/experts.bin",
           "destination": "mtp/rt/experts.bin",
+          "fetch": "drive",
           "size": 707788800,
           "sha256": "09398406be61f1f54c93861f449e48b8df0bfccbc9ec9b2b7636775a6ea9244f"
         },
@@ -48,6 +52,7 @@
           "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
           "source": "strata/rt/dense.txt",
           "destination": "mtp/rt/dense.txt",
+          "fetch": "drive",
           "size": 1880,
           "sha256": "8773c81ebb0986e37fe94a8a9933e87be48b1fabc6889a0106bcdab179d1c2ac"
         },
@@ -56,6 +61,7 @@
           "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
           "source": "strata/rt/draft_vocab.bin",
           "destination": "mtp/rt/draft_vocab.bin",
+          "fetch": "drive",
           "size": 425196,
           "sha256": "b1e1d3a7a9e4bf862dcd5923ce661fb59bbd07907e594df5cf86a62ac235cb91"
         }
@@ -72,6 +78,7 @@
           "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
           "source": "IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S-00001-of-00002.gguf",
           "destination": "models/IQ3_S-abliterated/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S-00001-of-00002.gguf",
+          "fetch": "huggingface",
           "size": 55063448064,
           "sha256": "40f369eca301ec6ea318dbb671b3132c26a2f0b89aa5458a7051b33215ee296c"
         },
@@ -80,6 +87,7 @@
           "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
           "source": "IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S-00002-of-00002.gguf",
           "destination": "models/IQ3_S-abliterated/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S-00002-of-00002.gguf",
+          "fetch": "huggingface",
           "size": 28800138432,
           "sha256": "316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
         },
@@ -88,6 +96,7 @@
           "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
           "source": "strata/rt/dense.bin",
           "destination": "mtp/rt/dense.bin",
+          "fetch": "drive",
           "size": 116099072,
           "sha256": "c724dc0b0822ada5d2977bf5bde821605feabaa64ea2e0045b67ca656329070a"
         },
@@ -96,6 +105,7 @@
           "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
           "source": "strata/rt/experts.bin",
           "destination": "mtp/rt/experts.bin",
+          "fetch": "drive",
           "size": 707788800,
           "sha256": "09398406be61f1f54c93861f449e48b8df0bfccbc9ec9b2b7636775a6ea9244f"
         },
@@ -104,6 +114,7 @@
           "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
           "source": "strata/rt/dense.txt",
           "destination": "mtp/rt/dense.txt",
+          "fetch": "drive",
           "size": 1880,
           "sha256": "8773c81ebb0986e37fe94a8a9933e87be48b1fabc6889a0106bcdab179d1c2ac"
         },
@@ -112,6 +123,7 @@
           "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
           "source": "strata/rt/draft_vocab.bin",
           "destination": "mtp/rt/draft_vocab.bin",
+          "fetch": "drive",
           "size": 425196,
           "sha256": "b1e1d3a7a9e4bf862dcd5923ce661fb59bbd07907e594df5cf86a62ac235cb91"
         }
